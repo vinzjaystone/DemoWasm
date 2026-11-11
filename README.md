@@ -98,6 +98,8 @@ cmake -S . -B build/native -DFETCHCONTENT_SOURCE_DIR_RAYLIB=/absolute/path/to/ra
 
 An installed Raylib package is also supported with `CMAKE_PREFIX_PATH`. Set `-DASHFALL_FETCH_RAYLIB=OFF` to require that package instead. Do not give the web build a native Raylib binary; use web-compiled Raylib or let CMake build it from source.
 
+The renderer supports the Raylib **5.5 and 6.0** gradient APIs: 5.5 takes integer `x, y` arguments to `DrawCircleGradient`, while 6.0 takes a `Vector2` center. A compile-time adapter selects the signature declared by the selected header; no version override or downgrade is needed. The default fetched release remains 5.5. CI compiles the application against both releases' actual headers.
+
 ## Tests
 
 ### Display-independent simulation tests
@@ -117,7 +119,7 @@ cmake --build build/tests --parallel
 ctest --test-dir build/tests --output-on-failure
 ```
 
-Coverage includes projection round trips/negative picking, collision and dash tunneling, A* invalid/unreachable/same-tile cases, optimal routing, no diagonal corner cutting, waypoint overshoot/rerouting, equipment cycling/stats, exact attack-sector intersection, cooldowns/invulnerability, one hit per swing, AI pursuit/telegraphs/dodging, death/removal, a complete eight-enemy playthrough, full-level connectivity, and a 100-second simulation stress run with collision and memory-budget invariants.
+Coverage includes both gradient API call shapes (without a graphics dependency), projection round trips/negative picking, collision and dash tunneling, A* invalid/unreachable/same-tile cases, optimal routing, no diagonal corner cutting, waypoint overshoot/rerouting, equipment cycling/stats, exact attack-sector intersection, cooldowns/invulnerability, one hit per swing, AI pursuit/telegraphs/dodging, death/removal, a complete eight-enemy playthrough, full-level connectivity, and a 100-second simulation stress run with collision and memory-budget invariants.
 
 ### Real browser smoke test (optional)
 
@@ -151,6 +153,7 @@ src/
   combat.h / .cpp          Enemy state + exact sector/AABB collision geometry
   world.h / .cpp           Simulation, AI, damage/death, effects, level progression
   renderer.h / .cpp        Procedural art, stable Y-sort, HUD, paper doll, UI hit testing
+  raylib_compat.h          Compile-time drawing API compatibility (Raylib 5.5/6.0)
   main.cpp                 Raylib input, fixed-step driver, native/web lifecycle
 web/shell.html             Minimal loading/fullscreen canvas shell; no game logic
 tests/core_tests.cpp     Native tests with no third-party test framework
