@@ -1,4 +1,5 @@
 #include "world.h"
+#include "raylib_compat.h"
 #include <cmath>
 #include <functional>
 #include <iostream>
@@ -19,6 +20,37 @@ void check(bool condition, const char* expression, int line) {
 bool near(float a, float b, float tolerance = 0.001f) { return std::abs(a - b) <= tolerance; }
 void tick(World& world, float seconds) {
     for (int i = 0; i < static_cast<int>(std::ceil(seconds * 120.0f)); ++i) world.update(1.0f / 120.0f);
+}
+void raylibGradientSignatures() {
+    // Stand-ins exercise both API shapes without installing/linking Raylib.
+    struct Tint { unsigned char r, g, b, a; };
+    struct Capture {
+        Vec2 center{};
+        float radius = 0;
+        Tint inner{}, outer{};
+        int calls = 0;
+    } legacy, modern;
+    const auto legacyDraw = [&](int x, int y, float radius, Tint inner, Tint outer) {
+        legacy = {{static_cast<float>(x), static_cast<float>(y)}, radius, inner, outer, legacy.calls + 1};
+    };
+    const auto modernDraw = [&](Vec2 center, float radius, Tint inner, Tint outer) {
+        modern = {center, radius, inner, outer, modern.calls + 1};
+    };
+    const Tint inner{255, 155, 65, 24}, outer{68, 75, 57, 0};
+    const auto sameTint = [](Tint a, Tint b) {
+        return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+    };
+    for (Vec2 center : {Vec2{12.75f, -4.25f}, {-13.5f, 22.75f}}) {
+        raylib_compat::drawCircleGradient(legacyDraw, center, 36.5f, inner, outer);
+        raylib_compat::drawCircleGradient(modernDraw, center, 36.5f, inner, outer);
+        CHECK(legacy.center.x == static_cast<float>(static_cast<int>(center.x)));
+        CHECK(legacy.center.y == static_cast<float>(static_cast<int>(center.y)));
+        CHECK(modern.center.x == center.x && modern.center.y == center.y);
+        CHECK(legacy.radius == 36.5f && modern.radius == 36.5f);
+        CHECK(sameTint(legacy.inner, inner) && sameTint(modern.inner, inner));
+        CHECK(sameTint(legacy.outer, outer) && sameTint(modern.outer, outer));
+    }
+    CHECK(legacy.calls == 2 && modern.calls == 2);
 }
 void projection() {
     IsoProjection iso{64, 32, {123, -71}};
@@ -334,6 +366,7 @@ void levelAndLongRun() {
 }
 int main() {
     const std::vector<std::pair<const char*, std::function<void()>>> tests = {
+        {"Raylib 5.5/6.0 gradient API compatibility", raylibGradientSignatures},
         {"projection and negative picking", projection}, {"grid collision and tunneling", gridAndCollision},
         {"A* basic cases", pathBasics}, {"A* maze and no corner cutting", pathCornersAndMaze},
         {"A* optimality vs Dijkstra on 80 maps", optimalPaths},

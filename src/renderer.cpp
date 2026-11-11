@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "raylib_compat.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -31,6 +32,9 @@ Color shade(Color c, float factor) {
 }
 bool inside(Vector2 p, Rectangle r) { return r.width > 0 && CheckCollisionPointRec(p, r); }
 void line(Vector2 a, Vector2 b, float width, Color color) { DrawLineEx(a, b, width, color); }
+void circleGradient(Vector2 center, float radius, Color inner, Color outer) {
+    raylib_compat::drawCircleGradient(&::DrawCircleGradient, center, radius, inner, outer);
+}
 void quad(Vector2 a, Vector2 b, Vector2 c, Vector2 d, Color color) {
     DrawTriangle(a, d, c, color);
     DrawTriangle(a, c, b, color);
@@ -455,7 +459,7 @@ void Renderer::drawObstacle(const World& world, TileCoord tile) {
         p.y -= 16;
         prism(p,19,9,7,Color{139,105,57,255},Color{85,74,44,255},Color{63,57,38,255});
         p.y -= 10;
-        DrawCircleGradient(static_cast<int>(p.x),static_cast<int>(p.y-10),36,Color{255,155,65,24},Color{255,155,65,0});
+        circleGradient({p.x,p.y-10},36,Color{255,155,65,24},Color{255,155,65,0});
         const float dance = std::sin(world.elapsed*9+static_cast<float>(tile.x))*3;
         polygon({{p.x-10,p.y+3},{p.x-12,p.y-5},{p.x-3,p.y-18},{p.x+1,p.y-9},
                  {p.x+3+dance,p.y-31},{p.x+11,p.y-10},{p.x+8,p.y+2}},Color{221,126,46,255});
@@ -733,8 +737,7 @@ void Renderer::drawHud(const World& world, const ViewState& view) const {
     const float radius = compact?22.0f:27.0f;
     DrawCircleV({orbX,orbY},radius+3,Background);
     DrawCircleV({orbX,orbY},radius,Color{76,38,35,255});
-    DrawCircleGradient(static_cast<int>(orbX-5),static_cast<int>(orbY-5),radius,
-                       Color{154,65,54,255},Color{88,37,35,255});
+    circleGradient({orbX-5,orbY-5},radius,Color{154,65,54,255},Color{88,37,35,255});
     DrawCircleLines(static_cast<int>(orbX),static_cast<int>(orbY),radius+2,shade(Gold,0.65f));
     icon(8,{orbX,orbY},radius*0.9f,alpha(Gold,0.75f));
     const float healthX = compact?65.0f:96.0f;
@@ -795,7 +798,7 @@ void Renderer::drawSidebar(const World& world) const {
     icon(1,{side.x+side.width-31,y+29},18,shade(Gold,0.8f));
     const float centerX = side.x+side.width*0.5f;
     const float avatarY = side.y+218;
-    DrawCircleGradient(static_cast<int>(centerX),static_cast<int>(side.y+158),83,Color{68,75,57,24},Color{68,75,57,0});
+    circleGradient({centerX,side.y+158},83,Color{68,75,57,24},Color{68,75,57,0});
     DrawEllipseLines(static_cast<int>(centerX),static_cast<int>(avatarY+3),64,23,Color{47,57,53,255});
     DrawEllipseLines(static_cast<int>(centerX),static_cast<int>(avatarY+3),56,19,Color{36,46,43,255});
     for (float dx : {-80.0f,80.0f}) {
