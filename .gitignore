@@ -1,0 +1,12 @@
+/build/
+/dist/
+/.cache/
+/node_modules/
+/.emscripten*
+CMakeUserPresets.json
+*.wasm
+*.o
+*.a
+*.exe
+*.DS_Store
+__pycache__/

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0c1012">
+  <meta name="description" content="Ashfall: an asset-free, isometric hack-and-slash built in C++17 with Raylib and WebAssembly. Enter the sanctum. Keep the flame alive.">
+  <title>Ashfall — The Ashen Sanctum</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='8' fill='%230c1012'/%3E%3Cpath d='M20 5L10 20l3 11 8 5 10-8-1-10-6-8-1 12-6 4z' fill='%23d3ab68'/%3E%3C/svg%3E">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #0c1012; }
+    #game-root { width: 100%; height: 100%; position: relative; }
+    canvas { display: block; width: 100% !important; height: 100% !important; border: 0; outline: none; touch-action: none; }
+    #loading { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0c1012; color: #d3ab68; transition: opacity .25s; pointer-events: none; font-family: ui-monospace, monospace; }
+    #loading.done { opacity: 0; visibility: hidden; }
+    .mark { font-size: 38px; margin-bottom: 24px; }
+    h1 { font: 400 26px/1.4 Georgia, serif; letter-spacing: .3em; margin: 0 0 20px .3em; color: #dee0d0; }
+    #status { color: #7e8c87; font-size: 10px; letter-spacing: .16em; text-align: center; padding: 0 24px; }
+    .track { width: 160px; height: 2px; background: #2d3535; margin-top: 24px; overflow: hidden; }
+    .spark { width: 40%; height: 100%; background: #d3ab68; animation: kindle 1.4s ease-in-out infinite; }
+    @keyframes kindle { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
+    noscript { position: fixed; top: 25%; width: 100%; text-align: center; color: #dee0d0; font-family: sans-serif; }
+  </style>
+</head>
+<body>
+  <div id="game-root">
+    <canvas id="canvas" tabindex="0" aria-label="Ashfall game. Left click to move, right click or Space to attack, Shift to dodge, Q to heal, H for field guide." oncontextmenu="event.preventDefault()"></canvas>
+    <div id="loading" role="status" aria-live="polite">
+      <div class="mark" aria-hidden="true">♢</div>
+      <h1>ASHFALL</h1>
+      <div id="status">KINDLING THE FLAME</div>
+      <div class="track"><div class="spark"></div></div>
+    </div>
+  </div>
+  <noscript>Enable JavaScript and WebAssembly to enter the sanctum.</noscript>
+  <script>
+    var Module = {
+      canvas: document.getElementById('canvas'),
+      print: function (text) { console.log(text); },
+      printErr: function (text) { console.error(text); },
+      setStatus: function (text) {
+        if (text) document.getElementById('status').textContent = text;
+      },
+      onRuntimeInitialized: function () {
+        document.getElementById('loading').classList.add('done');
+        Module.canvas.focus({ preventScroll: true });
+      },
+      onAbort: function (reason) {
+        document.getElementById('loading').classList.remove('done');
+        document.getElementById('status').textContent = 'Unable to start. WebGL and WebAssembly are required. Reload to retry.';
+        console.error('Ashfall startup failed:', reason);
+      }
+    };
+    Module.canvas.addEventListener('pointerdown', function () { Module.canvas.focus({ preventScroll: true }); });
+    window.addEventListener('keydown', function (event) {
+      if (event.target === Module.canvas && [' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'F1'].includes(event.key)) event.preventDefault();
+    }, { passive: false });
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>
