@@ -44,9 +44,11 @@ try {
 
   await page.mouse.click(1280, 366); // Head slot, not the ground underneath it.
   await until(s => s.head === 1 && s.armor === 11, 'head slot click');
+  assert.ok((await state()).attackInterval > 2.5, 'heavy headgear slows attacks');
   assert.equal((await state()).moving, false);
   await page.mouse.click(1280, 442);
   await until(s => s.body === 2 && s.armor === 8, 'armor slot click');
+  assert.ok((await state()).attackInterval < 2.5, 'light armor speeds attacks');
   await page.keyboard.press('Digit3');
   await until(s => s.boots === 1 && s.armor === 10, 'boots shortcut');
   console.log('[PASS] Paper-doll slot clicks, shortcuts, live stats, no click-through');
@@ -60,9 +62,17 @@ try {
   await page.keyboard.press('KeyG');
   await clickWorld(5.5, 6.5); // Blocked column.
   assert.equal((await state()).moving, false);
-  await clickWorld(9.5, 12.5);
-  await until(s => Math.hypot(s.x - 9.5, s.y - 12.5) < 0.06 && !s.moving, 'click-to-move arrival');
-  console.log('[PASS] Obstacle rejection, isometric picking, smooth path arrival');
+  let previous = await state();
+  for (let click = 0; click < 6; ++click) {
+    await clickWorld(click % 2 === 0 ? 15.5 : 16.5, 12.5);
+    const next = await until(s => s.elapsed > previous.elapsed + 0.025, 'reroute advances simulation');
+    assert.ok(next.x > previous.x + 0.01, 'repeated reroutes must keep moving forward');
+    assert.ok(Math.abs(next.y - 12.5) < 0.03, 'rerouting must not displace the actor sideways');
+    previous = next;
+  }
+  await clickWorld(9.5, 12.5); // Reverse direction and arrive using only the newest command.
+  await until(s => Math.hypot(s.x - 9.5, s.y - 12.5) < 0.06 && !s.moving, 'replacement route arrival');
+  console.log('[PASS] Obstacle rejection, isometric picking, repeated mid-tile route replacement');
 
   await page.keyboard.down('Space');
   await until(s => s.attack, 'attack input');
@@ -87,32 +97,57 @@ try {
   assert.equal((await state()).potions, 3); // Full-health flasks must not be consumed.
   console.log('[PASS] Attack, dodge, pause clock, guide, restart, full-health flask');
 
-  // Play through a kill using ordinary inputs. Diagnostics are read-only.
-  await clickWorld(6.5, 16.5);
-  await page.keyboard.down('Space');
-  const deadline = Date.now() + 24000;
-  let combatScreenshot = false;
-  while (Date.now() < deadline) {
-    const s = await state();
-    if (s.kills >= 1) break;
-    assert.ok(s.health > 0, 'player should survive the first encounter');
-    const targets = s.targets.filter(e => e.health > 0)
-      .sort((a, b) => Math.hypot(a.x - s.x, a.y - s.y) - Math.hypot(b.x - s.x, b.y - s.y));
-    const target = targets[0];
-    await page.mouse.move(target.screenX, target.screenY);
-    const distance = Math.hypot(target.x - s.x, target.y - s.y);
-    if (distance > 1.5 && !s.moving) await clickWorld(target.x, target.y);
-    if (s.health < 65 && s.potions > 0) await page.keyboard.press('KeyQ');
-    if (!combatScreenshot && target.health < 65 && s.attack) {
-      await page.screenshot({ path: `${artifacts}/combat.png` });
-      combatScreenshot = true;
-    }
-    await page.waitForTimeout(90);
-  }
-  await page.keyboard.up('Space');
-  const afterCombat = await until(s => s.kills >= 1, 'enemy death', 1000);
+  // Sprite-body picking, HUD input capture, and cancellation use real clicks.
+  let snapshot = await state();
+  let target = snapshot.targets.find(e => e.id === 6);
+  await page.mouse.click(target.screenX, target.screenY - 26 * snapshot.zoom);
+  let selected = await until(s => s.selectedId === target.id, 'monster body selection');
+  assert.equal(selected.targetAction, 1); // Chasing, not swinging out of range.
+  assert.equal(selected.attackSerial, 0);
+  assert.ok(selected.targetHud.width > 0);
+  assert.ok(Math.abs(selected.targetHud.x + selected.targetHud.width / 2 - 570) < 1);
+  assert.ok(selected.targetHud.y < 120, 'target HP must be at the upper center');
+  await page.mouse.click(selected.targetHud.x + 140, selected.targetHud.y + 38);
+  await page.waitForTimeout(80);
+  assert.equal((await state()).selectedId, target.id, 'target HUD must not click through to the floor');
+  await clickWorld(8.5, 11.5);
+  await until(s => s.selectedId === 0 && s.targetHud.width === 0, 'floor click cancels auto-combat');
+  await page.keyboard.press('KeyR');
+  await until(s => s.selectedId === 0 && s.attackSerial === 0 && s.health === 120, 'reset target state');
+  console.log('[PASS] Body picking, upper-center target HUD, input capture, floor cancellation');
+
+  // One click must chase, stop in melee range, and finish the kill. No held key,
+  // repeated command, or diagnostic mutation may assist this encounter.
+  snapshot = await state();
+  target = snapshot.targets.find(e => e.id === 6);
+  await page.mouse.click(target.screenX, target.screenY - 26 * snapshot.zoom);
+  await until(s => s.selectedId === target.id && s.moving, 'single-click pursuit');
+  await page.mouse.move(35, 90); // Facing and aim must remain locked to the selected monster.
+  const first = await until(s => s.attackSerial === 1, 'first automatic strike');
+  const liveTarget = first.targets.find(e => e.id === target.id);
+  assert.ok(Math.hypot(first.x - liveTarget.x, first.y - liveTarget.y) < 1.45);
+  assert.equal(first.moving, false, 'stop to attack in melee range');
+  await until(s => s.selectedHealth < s.selectedMaxHealth, 'selected HP changes after damage');
+  await page.screenshot({ path: `${artifacts}/target-combat.png` });
+  const second = await until(s => s.attackSerial === 2, 'second automatic strike');
+  assert.ok(second.elapsed - first.elapsed >= 2.3 && second.elapsed - first.elapsed <= 2.85,
+    `base ASPD should produce ~2.5s strikes, got ${second.elapsed - first.elapsed}`);
+  await page.keyboard.press('Escape');
+  const combatPaused = await until(s => s.paused, 'pause auto-combat');
+  await page.waitForTimeout(250);
+  const combatStill = await state();
+  assert.equal(combatStill.selectedId, target.id);
+  assert.equal(combatStill.attackCooldown, combatPaused.attackCooldown);
+  assert.equal(combatStill.attackSerial, combatPaused.attackSerial);
+  await page.keyboard.press('Escape');
+  await until(s => !s.paused, 'resume auto-combat');
+  const afterCombat = await until(s => s.kills >= 1, 'automatic enemy death', 12000);
+  assert.ok(afterCombat.health > 0);
   assert.ok(afterCombat.enemies <= 7);
-  console.log('[PASS] Pursuit, melee damage, combo attacks, enemy death and quest progress');
+  assert.equal(afterCombat.selectedId, 0);
+  assert.equal(afterCombat.targetHud.width, 0);
+  await until(s => !s.targets.some(e => e.id === target.id), 'dead target removal');
+  console.log('[PASS] Single-click chase, auto-attack cadence, live HP, pause, death/removal cleanup');
 
   await page.keyboard.press('KeyR');
   await until(s => s.kills === 0 && s.health === 120, 'final reset');
@@ -120,13 +155,26 @@ try {
   await page.screenshot({ path: `${artifacts}/desktop.png` });
   await page.setViewportSize({ width: 960, height: 720 });
   await page.waitForFunction(() => Module.canvas.width === 960 && Module.canvas.height === 720);
+  snapshot = await state();
+  target = snapshot.targets.find(e => e.id === 6);
+  await page.mouse.click(target.screenX, target.screenY - 26 * snapshot.zoom);
+  selected = await until(s => s.selectedId === target.id, 'compact target picking');
+  assert.ok(Math.abs(selected.targetHud.x + selected.targetHud.width / 2 - 347) < 1);
   await page.screenshot({ path: `${artifacts}/compact.png` });
   await page.setViewportSize({ width: 640, height: 560 });
   await page.keyboard.press('KeyI'); // Hide the overlay inventory on narrow screens.
   await until(s => !s.inventory, 'compact inventory');
   await page.waitForFunction(() => Module.canvas.width === 640 && Module.canvas.height === 560);
+  await page.keyboard.press('KeyR');
+  await until(s => s.selectedId === 0 && s.attackSerial === 0, 'small view reset');
   await clickWorld(9.5, 12.5);
   await until(s => Math.hypot(s.x - 9.5, s.y - 12.5) < 0.06, 'resized picking');
+  snapshot = await state();
+  target = snapshot.targets.find(e => e.id === 6);
+  await page.mouse.click(target.screenX, target.screenY); // Feet picking works too.
+  selected = await until(s => s.selectedId === target.id, 'small target feet picking');
+  assert.ok(Math.abs(selected.targetHud.x + selected.targetHud.width / 2 - 320) < 1);
+  assert.ok(selected.targetHud.y < 100 && selected.targetHud.x >= 0);
   await page.screenshot({ path: `${artifacts}/small.png` });
   console.log('[PASS] Canvas resizing, compact UI, picking after resize');
   assert.deepEqual(errors, [], 'browser errors');

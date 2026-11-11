@@ -31,6 +31,7 @@ struct Enemy {
     float aggroRadius() const { return kind == EnemyKind::Warden ? 4.8f : 4.25f; }
     float attackRange() const { return kind == EnemyKind::Warden ? 1.4f : 1.05f; }
     float windup() const { return kind == EnemyKind::Warden ? 0.62f : 0.45f; }
+    float attackInterval() const { return kind == EnemyKind::Warden ? 2.6f : 2.0f; }
     int damage() const { return kind == EnemyKind::Warden ? 24 : 14; }
     Bounds bounds() const { return {position, {radius(), radius()}}; }
 };

@@ -74,6 +74,44 @@ bool Grid::canOccupy(Vec2 p, float radius) const {
     }
     return true;
 }
+bool Grid::clearSegment(Vec2 from, Vec2 to, float radius) const {
+    if (!canOccupy(from, radius) || !canOccupy(to, radius)) return false;
+    const Vec2 delta = to - from;
+    const float squared = lengthSquared(delta);
+    if (squared < 0.000001f) return true;
+    const TileCoord min = tileAt({std::min(from.x,to.x)-radius, std::min(from.y,to.y)-radius});
+    const TileCoord max = tileAt({std::max(from.x,to.x)+radius, std::max(from.y,to.y)+radius});
+    for (int y = min.y; y <= max.y; ++y) for (int x = min.x; x <= max.x; ++x) {
+        if (walkable({x,y})) continue;
+        // A segment crossing the box interior always collides, even if its
+        // distance to every corner exceeds the actor radius.
+        float first = 0, last = 1;
+        bool intersects = true;
+        for (int axis = 0; axis < 2; ++axis) {
+            const float p = axis == 0 ? from.x : from.y;
+            const float d = axis == 0 ? delta.x : delta.y;
+            const float low = static_cast<float>(axis == 0 ? x : y);
+            if (std::abs(d) < 0.000001f) {
+                if (p < low || p > low+1) intersects = false;
+            } else {
+                float near = (low-p)/d, far = (low+1-p)/d;
+                if (near > far) std::swap(near,far);
+                first = std::max(first,near);
+                last = std::min(last,far);
+                if (first > last) intersects = false;
+            }
+        }
+        if (intersects) return false;
+        // Endpoint circles were checked above. With no interior crossing, the
+        // remaining minimum distance is between a box corner and the segment.
+        for (int cy = y; cy <= y+1; ++cy) for (int cx = x; cx <= x+1; ++cx) {
+            const Vec2 corner{static_cast<float>(cx),static_cast<float>(cy)};
+            const float t = clamp01(dot(corner-from,delta)/squared);
+            if (lengthSquared(corner-(from+delta*t)) < radius*radius+0.000001f) return false;
+        }
+    }
+    return true;
+}
 Vec2 Grid::moveWithCollision(Vec2 from, Vec2 delta, float radius) const {
     if (!finite(from) || !finite(delta) || !std::isfinite(radius) || radius < 0.0f) return from;
     const float len = length(delta);

@@ -150,6 +150,11 @@ void Renderer::prepare(const World& world, const ViewState& view, float frameDt)
     layout_.scene = {0,head,sceneWidth,std::max(80.0f,h-head-foot)};
     layout_.footer = {0,h-foot,sceneWidth,foot};
     layout_.sidebar = view.inventory ? Rectangle{w-side,head,side,h-head} : Rectangle{};
+    // Center on the visible play area, including when the inventory overlays it.
+    const float visibleWidth = sceneWidth-(view.inventory && overlay ? side : 0);
+    const float targetWidth = std::min(300.0f,std::max(0.0f,visibleWidth-32));
+    layout_.targetHud = world.selectedEnemy() ?
+        Rectangle{(visibleWidth-targetWidth)*0.5f,head+18,targetWidth,80} : Rectangle{};
     const float tabX = w >= 1100 ? 330.0f : (w >= 760 ? 275.0f : 170.0f);
     layout_.inventoryButton = {tabX,0,w < 760 ? 82.0f : 115.0f,head};
     layout_.helpButton = {tabX+(w < 760 ? 82.0f : 115.0f),0,w < 760 ? 60.0f : 110.0f,head};
@@ -191,9 +196,26 @@ Vec2 Renderer::screenToWorld(Vector2 p) const {
     return iso_.screenToWorld({plane.x,plane.y});
 }
 Vector2 Renderer::worldToScreen(Vec2 p) const { return GetWorldToScreen2D(rv(iso_.worldToScreen(p)),camera_); }
+std::uint32_t Renderer::pickEnemy(Vector2 mouse, const World& world) const {
+    const Vector2 point = GetScreenToWorld2D(mouse,camera_);
+    std::uint32_t picked = 0;
+    float front = -1e9f;
+    for (const Enemy& enemy : world.enemies) {
+        if (!enemy.alive()) continue;
+        const Vector2 feet = rv(iso_.worldToScreen(enemy.position));
+        const float scale = enemy.kind == EnemyKind::Warden ? 1.33f : 1.0f;
+        const float halfWidth = std::max(18*scale,7/camera_.zoom);
+        if (inside(point,{feet.x-halfWidth,feet.y-56*scale,halfWidth*2,64*scale}) && feet.y>=front) {
+            front = feet.y;
+            picked = enemy.id; // Same back-to-front order as the stable scene draw list.
+        }
+    }
+    return picked;
+}
 bool Renderer::sceneContains(Vector2 mouse, const World& world, const ViewState& view) const {
     return !view.paused && !view.help && world.player.alive() && !world.cleared() &&
-           inside(mouse,layout_.scene) && !(layout_.sidebarVisible && inside(mouse,layout_.sidebar)) &&
+           inside(mouse,layout_.scene) && !inside(mouse,layout_.targetHud) &&
+           !(layout_.sidebarVisible && inside(mouse,layout_.sidebar)) &&
            hitTest(mouse,world,view) == UiAction::None;
 }
 UiAction Renderer::hitTest(Vector2 mouse, const World& world, const ViewState& view) const {
@@ -342,7 +364,9 @@ void Renderer::drawSector(Vec2 center, Vec2 direction, float radius, float halfA
 }
 void Renderer::drawDungeon(const World& world, const ViewState& view) {
     drawFloor(world,view);
-    if (sceneContains(GetMousePosition(),world,view)) {
+    const std::uint32_t hovered = sceneContains(GetMousePosition(),world,view) ?
+        pickEnemy(GetMousePosition(),world) : 0;
+    if (sceneContains(GetMousePosition(),world,view) && hovered==0) {
         const TileCoord hover = tileAt(screenToWorld(GetMousePosition()));
         if (world.grid.hasFloor(hover)) {
             const Vector2 p = rv(iso_.worldToScreen(hover.center()));
@@ -396,7 +420,11 @@ void Renderer::drawDungeon(const World& world, const ViewState& view) {
         switch (item.kind) {
             case 0: drawObstacle(world,item.tile); break;
             case 1: drawPortal(world); break;
-            case 2: drawEnemy(world.enemies[item.index]); break;
+            case 2: {
+                const Enemy& enemy = world.enemies[item.index];
+                drawEnemy(enemy,enemy.id==world.selectedEnemyId(),enemy.id==hovered);
+                break;
+            }
             case 3: drawHero(rv(iso_.worldToScreen(world.player.position)),world.player,1.0f); break;
             default: break;
         }
@@ -595,7 +623,7 @@ void Renderer::drawHero(Vector2 feet, const Player& player, float scale, bool pr
     line({hand.x-direction.y*5*scale,hand.y+direction.x*5*scale},
          {hand.x+direction.y*5*scale,hand.y-direction.x*5*scale},2.5f*scale,Gold);
 }
-void Renderer::drawEnemy(const Enemy& enemy) const {
+void Renderer::drawEnemy(const Enemy& enemy, bool selected, bool hovered) const {
     const Vector2 feet = rv(iso_.worldToScreen(enemy.position));
     const float s = enemy.kind == EnemyKind::Warden ? 1.33f : 1.0f;
     const float gait = enemy.state == EnemyState::Chase ? std::sin(enemy.animation)*2 : 0;
@@ -615,9 +643,14 @@ void Renderer::drawEnemy(const Enemy& enemy) const {
         DrawCircleV(p(14,-4),5*s,alpha(Color{170,156,125,255},fade));
         return;
     }
-    const Vec2 cursor = screenToWorld(GetMousePosition());
-    const bool hover = distance(cursor,enemy.position) < 0.6f;
-    if (hover) DrawEllipseLines(static_cast<int>(feet.x),static_cast<int>(feet.y),18*s,8*s,alpha(Red,0.8f));
+    if (selected || hovered) {
+        const Color color = selected ? Gold : Red;
+        DrawEllipseLines(static_cast<int>(feet.x),static_cast<int>(feet.y),20*s,9*s,alpha(color,0.9f));
+        if (selected) {
+            diamond({feet.x-24*s,feet.y},3*s,2*s,color);
+            diamond({feet.x+24*s,feet.y},3*s,2*s,color);
+        }
+    }
     shape({{-9,-30},{8,-30},{13,-4},{3,-7},{-3,-2},{-12,-5}},shade(cloth,0.66f));
     line(p(-5,-19),p(-7,-1+gait),5*s,Color{71,64,56,255});
     line(p(5,-19),p(7,-1-gait),5*s,Color{65,58,51,255});
@@ -648,7 +681,7 @@ void Renderer::drawEnemy(const Enemy& enemy) const {
     if (enemy.kind == EnemyKind::Warden) {
         line({end.x-6*s,end.y-4*s},{end.x+6*s,end.y+4*s},7*s,Color{137,124,96,255});
     }
-    if (hover || enemy.health < enemy.maxHealth || enemy.state != EnemyState::Idle) {
+    if (selected || hovered || enemy.health < enemy.maxHealth || enemy.state != EnemyState::Idle) {
         const float width = enemy.kind == EnemyKind::Warden?44.0f:34.0f;
         const float y = feet.y-57*s;
         if (enemy.kind == EnemyKind::Warden) centered("ASH WARDEN",feet.x,y-13,9,Gold,1.3f);
@@ -687,25 +720,30 @@ void Renderer::drawHud(const World& world, const ViewState& view) const {
          inside(GetMousePosition(),layout_.fullscreenButton)?Gold:Muted);
     const float titleX = compact?22.0f:34.0f;
     const float titleY = layout_.scene.y+27;
-    text("ACT I  /  THE HOLLOW LANDS",titleX,titleY,9,Gold,1.6f);
-    text("The Ashen Sanctum",titleX,titleY+23,compact?20.0f:26.0f,Ink,1.0f);
-    if (!compact) text("A forgotten place. An unfinished oath.",titleX,titleY+61,11,Muted,0.8f);
-    if (sceneWidth>=800) {
-        const float qx = sceneWidth-249;
-        icon(7,{qx+10,titleY+11},19,Gold);
-        text("SANCTUM OBJECTIVE",qx+31,titleY+2,9,Muted,1.4f);
-        text(world.cleared()?"The hollow are silent":"Silence the hollow",qx+31,titleY+21,14,Ink);
-        DrawRectangleRec({qx+31,titleY+48,150,3},Border);
-        DrawRectangleRec({qx+31,titleY+48,150*static_cast<float>(world.kills)/
-                          static_cast<float>(std::max(1,world.totalEnemies)),3},Gold);
-        char progress[32];
-        std::snprintf(progress,sizeof(progress),"%d / %d",world.kills,world.totalEnemies);
-        text(progress,qx+188,titleY+44,11,Gold);
-    } else {
-        char progress[32];
-        std::snprintf(progress,sizeof(progress),"HOLLOW  %d / %d",world.kills,world.totalEnemies);
-        text(progress,titleX,titleY+55,9,Muted,1.2f);
+    // On narrower views the selected monster takes priority over location and
+    // quest labels; the target panel must never overlap either of them.
+    if (!world.selectedEnemy() || sceneWidth>=1000) {
+        text("ACT I  /  THE HOLLOW LANDS",titleX,titleY,9,Gold,1.6f);
+        text("The Ashen Sanctum",titleX,titleY+23,compact?20.0f:26.0f,Ink,1.0f);
+        if (!compact) text("A forgotten place. An unfinished oath.",titleX,titleY+61,11,Muted,0.8f);
+        if (sceneWidth>=800) {
+            const float qx = sceneWidth-249;
+            icon(7,{qx+10,titleY+11},19,Gold);
+            text("SANCTUM OBJECTIVE",qx+31,titleY+2,9,Muted,1.4f);
+            text(world.cleared()?"The hollow are silent":"Silence the hollow",qx+31,titleY+21,14,Ink);
+            DrawRectangleRec({qx+31,titleY+48,150,3},Border);
+            DrawRectangleRec({qx+31,titleY+48,150*static_cast<float>(world.kills)/
+                              static_cast<float>(std::max(1,world.totalEnemies)),3},Gold);
+            char progress[32];
+            std::snprintf(progress,sizeof(progress),"%d / %d",world.kills,world.totalEnemies);
+            text(progress,qx+188,titleY+44,11,Gold);
+        } else {
+            char progress[32];
+            std::snprintf(progress,sizeof(progress),"HOLLOW  %d / %d",world.kills,world.totalEnemies);
+            text(progress,titleX,titleY+55,9,Muted,1.2f);
+        }
     }
+    drawTargetHud(world);
     if (world.noticeRemaining > 0 && !view.paused && world.player.alive()) {
         const float width = textWidth(world.notice.c_str(),11,0.5f)+34;
         const float x = (sceneWidth-width)*0.5f;
@@ -716,11 +754,11 @@ void Renderer::drawHud(const World& world, const ViewState& view) const {
     }
     if (!compact) {
         text("LMB",34,layout_.footer.y-31,10,Gold,1.3f);
-        text("MOVE",68,layout_.footer.y-31,9,Muted,1.1f);
-        text("RMB / SPACE",132,layout_.footer.y-31,10,Gold,1.1f);
-        text("ATTACK",228,layout_.footer.y-31,9,Muted,1.1f);
+        text("MOVE / TARGET",68,layout_.footer.y-31,9,Muted,1.1f);
+        text("RMB / SPACE",208,layout_.footer.y-31,10,Gold,1.1f);
+        text("CLEAVE",306,layout_.footer.y-31,9,Muted,1.1f);
         const char* controls = "[G] GRID  /  SCROLL TO ZOOM";
-        if (sceneWidth>1000) text(controls,sceneWidth*0.5f-74,layout_.footer.y-31,8,Dim,1.1f);
+        if (sceneWidth>1100) text(controls,sceneWidth*0.5f-40,layout_.footer.y-31,8,Dim,1.1f);
     }
     for (const auto& b : {std::make_pair(layout_.zoomOut,"-"),std::make_pair(layout_.resetZoom,"o"),
                           std::make_pair(layout_.zoomIn,"+")}) {
@@ -785,7 +823,30 @@ void Renderer::drawHud(const World& world, const ViewState& view) const {
         text("DEPTH 01",34,fy+91,8,Dim,1.4f);
         const char* oath = "KEEP THE FLAME ALIVE";
         text(oath,sceneWidth-textWidth(oath,8,1.4f)-28,fy+91,8,Dim,1.4f);
-    } else text("CLICK TO MOVE  /  RMB TO ATTACK",22,fy+84,8,Dim,0.7f);
+    } else text("CLICK GROUND: MOVE  /  MONSTER: AUTO-ATTACK",22,fy+84,8,Dim,0.7f);
+}
+void Renderer::drawTargetHud(const World& world) const {
+    const Enemy* enemy = world.selectedEnemy();
+    const Rectangle r = layout_.targetHud;
+    if (!enemy || r.width<=0) return;
+    DrawRectangleRec(r,alpha(Panel,0.97f));
+    DrawRectangleLinesEx(r,1,Border);
+    horizontal(r.x+1,r.y,r.width-2,Gold);
+    diamond({r.x+14,r.y+18},3,4,Gold);
+    text(enemy->kind==EnemyKind::Warden ? "ASH WARDEN" : "ASH HOLLOW",r.x+25,r.y+12,12,Gold,1.1f);
+    char health[32];
+    std::snprintf(health,sizeof(health),"%d / %d",enemy->health,enemy->maxHealth);
+    text(health,r.x+r.width-textWidth(health,11)-12,r.y+13,11,Ink);
+    const float fraction = clamp01(static_cast<float>(enemy->health)/static_cast<float>(enemy->maxHealth));
+    DrawRectangleRec({r.x+12,r.y+34,r.width-24,7},Background);
+    DrawRectangleRec({r.x+12,r.y+34,(r.width-24)*fraction,7},Red);
+    const char* status = "CHASING";
+    if (world.targetAction()==TargetAction::Attacking) status = "AUTO-ATTACK";
+    else if (world.targetAction()==TargetAction::Unreachable) status = "NO PATH";
+    text(status,r.x+12,r.y+56,9,world.targetAction()==TargetAction::Unreachable?Red:Teal,0.7f);
+    char interval[32];
+    std::snprintf(interval,sizeof(interval),"%.2fs / HIT",static_cast<double>(world.player.attackInterval()));
+    text(interval,r.x+r.width-textWidth(interval,9,0.5f)-12,r.y+56,9,Muted,0.5f);
 }
 void Renderer::drawSidebar(const World& world) const {
     const Rectangle side = layout_.sidebar;
@@ -819,9 +880,11 @@ void Renderer::drawSidebar(const World& world) const {
         icon(symbol,{r.x+30.5f,r.y+33},24,tint(gear.tint));
         text(title,r.x+64,r.y+10,8,Muted,1.5f);
         text(gear.name.data(),r.x+64,r.y+25,13,Ink,0.3f);
-        char armor[40];
-        std::snprintf(armor,sizeof(armor),"+%d ARMOR",gear.armor);
-        text(armor,r.x+64,r.y+45,8,Gold,0.9f);
+        char stats[48];
+        const int aspd = static_cast<int>(std::lround(gear.attackSpeedBonus*100));
+        if (aspd!=0) std::snprintf(stats,sizeof(stats),"%d ARM  %+d%% ASPD",gear.armor,aspd);
+        else std::snprintf(stats,sizeof(stats),"+%d ARMOR",gear.armor);
+        text(stats,r.x+64,r.y+45,8,Gold,0.4f);
         text(key,r.x+r.width-20,r.y+10,8,Dim);
         text(">",r.x+r.width-18,r.y+36,11,hover?Gold:Dim);
     };
@@ -844,6 +907,10 @@ void Renderer::drawSidebar(const World& world) const {
         if (i<2) line({x+gap*static_cast<float>(i+1),statsY+4},
                      {x+gap*static_cast<float>(i+1),statsY+36},1,Border);
     }
+    char cadence[64];
+    std::snprintf(cadence,sizeof(cadence),"ASPD %.2fx  /  %.2fs PER HIT",
+                  static_cast<double>(world.player.attackSpeed()),static_cast<double>(world.player.attackInterval()));
+    centered(cadence,centerX,statsY+50,8,Teal,0.5f);
     const float bottom = side.y+side.height;
     if (side.height > 740) {
         horizontal(x,bottom-206,side.width-44);
@@ -889,8 +956,8 @@ void Renderer::drawModal(const World& world,const ViewState& view) const {
         centered("A FLAME WORTH KEEPING",cx,r.y+77,18,Ink,1.5f);
         centered("Enter the sanctum. Silence the hollow. Survive.",cx,r.y+108,10,Muted,0.7f);
         struct Row { const char* key; const char* title; const char* detail; };
-        const std::array<Row,6> rows = {{{"LMB","Move","A* finds a path around the ruins."},
-            {"RMB / SPACE","Cleave","Aim with the mouse. Hold to chain 3 strikes."},
+        const std::array<Row,6> rows = {{{"LMB","Move / Target","Ground: move. Monster: chase and auto-attack."},
+            {"RMB / SPACE","Cleave","Manual aim. ASPD sets the 2-3s strike interval."},
             {"SHIFT","Dodge","Dash toward the cursor. Briefly invulnerable."},
             {"Q","Heal","Recover 50 vitality. Three flasks per run."},
             {"1 / 2 / 3","Equip","Cycle head, armor, and boots. Stats are live."},
