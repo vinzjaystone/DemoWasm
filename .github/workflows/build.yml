@@ -1,0 +1,78 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  simulation:
+    name: Simulation (sanitizers ${{ matrix.sanitizers }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        sanitizers: ['OFF', 'ON']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure without graphics dependencies
+        run: cmake -S . -B build/tests -DASHFALL_BUILD_GAME=OFF -DASHFALL_SANITIZERS=${{ matrix.sanitizers }} -DCMAKE_BUILD_TYPE=Debug
+      - run: cmake --build build/tests --parallel 4
+      - run: ctest --test-dir build/tests --output-on-failure
+
+  desktop:
+    name: Native desktop build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install window dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev
+      - run: cmake -S . -B build/native -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build/native --parallel 4
+      - run: ctest --test-dir build/native --output-on-failure
+
+  web:
+    name: WebAssembly and real-browser smoke test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 6.0.9
+          actions-cache-folder: emsdk-cache
+      - name: Build with read-only diagnostics
+        run: |
+          emcmake cmake -S . -B build/web -DCMAKE_BUILD_TYPE=Release -DASHFALL_BUILD_TESTS=OFF -DASHFALL_WEB_TEST_API=ON
+          cmake --build build/web --parallel 4
+      - name: Install browser test tools
+        run: |
+          npm install --no-save --package-lock=false playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Exercise the actual WASM build
+        run: |
+          python3 tools/serve.py --directory build/web --port 8080 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID"' EXIT
+          node tests/browser_smoke.mjs
+      - name: Save screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-screenshots
+          path: build/browser/*.png
+          if-no-files-found: ignore
+      - name: Build release without diagnostics
+        run: |
+          emcmake cmake -S . -B build/web -DASHFALL_WEB_TEST_API=OFF
+          cmake --build build/web --parallel 4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ashfall-web
+          path: |
+            build/web/index.html
+            build/web/index.js
+            build/web/index.wasm
