@@ -50,7 +50,7 @@ async function clickWorld(x, y) {
     s.cameraY + ((x + y) * 16 - s.targetY) * s.zoom);
 }
 try {
-  await page.goto(process.env.GAME_URL || 'http://127.0.0.1:8080', { waitUntil: 'networkidle' });
+  await page.goto(process.env.GAME_URL || 'http://127.0.0.1:8080/index.html', { waitUntil: 'networkidle' });
   await page.waitForFunction(() => typeof window.Module?._ashfall_get_state === 'function', null, { timeout: 30000 });
   assert.equal((await state()).health, 120);
   assert.equal((await state()).enemies, 8);

@@ -2,7 +2,9 @@
 
 An asset-free isometric hack-and-slash MVP in **C++17 + Raylib 5.5**, built for **desktop and WebAssembly**. Enter a ruined sanctuary, cut down seven hollow and their Ash Warden, and keep your flame alive.
 
-All art is procedural: stone tiles, pillars, rubble, braziers, the portal, characters, equipment, attack trails, particles, and interface. The only font is Raylib's embedded default font. **No images, spritesheets, font downloads, asset packs, JavaScript game engine, or runtime network requests are required.**
+The repository also includes **Sprite Workshop**, a standalone pixel-art editor built with the same C++17/Raylib stack. Open it from the game’s **SPRITE EDITOR** link, or build the native tool with `make editor`.
+
+All game art is procedural: stone tiles, pillars, rubble, braziers, the portal, characters, equipment, attack trails, particles, and interface. The only font is Raylib's embedded default font. **No images, spritesheets, font downloads, asset packs, JavaScript game engine, or runtime network requests are required.**
 
 ## Play
 
@@ -36,6 +38,35 @@ A valid ground command, a dash, or a manual attack cancels auto-combat. Target d
 
 Each slot has three pieces with a distinct tint/silhouette and actual gameplay stats. Total armor reduces each incoming hit by `floor(armor × 0.65)`, with a minimum of one damage. Movement speed is `3.6 + sum(equipment speed bonuses)` tiles/second. Iron sallets/greaves each give −5% ASPD; cinder crowns and ranger leathers +5%; crimson mantles and fleetstriders +10%. The player starts with 120 vitality; kills grant embers and experience, and each 100 XP increases level and damage.
 
+## Sprite Workshop
+
+A separate tool alongside the game, not a replacement renderer. It starts with a procedural 32 × 32 character you can edit, or a new transparent **16, 32, 64, or 128 px** square canvas.
+
+- **Pencil, eraser, flood fill, color picker, straight line, and outline rectangle.** Fast drags are connected without gaps; one stroke is one undo step.
+- **28-color palette** (including transparent), plus custom **RGB/RGBA hex** (`#RRGGBB` or `#RRGGBBAA`). Alpha is stored exactly, not flattened onto the checkerboard.
+- **Undo/redo** with a bounded 64-step history, horizontal mirror painting, horizontal/vertical flips, and lossless clockwise rotation. Rectangular imports rotate without resampling.
+- **Nearest-neighbor zoom**, cursor-anchored wheel zoom, grid, fit-to-canvas, Space/middle-button panning, and a live preview on larger windows. Compact windows use a bottom palette; click the foreground swatch to edit hex or the footer filename to rename.
+- **Transparent PNG import/export at original pixel resolution**, independent of canvas zoom/grid. Imports accept 1–128 pixels per side and at most 8 MiB; invalid files leave your artwork intact.
+- New/import/leave confirmations protect unexported work; desktop exports also ask before replacing an existing file. Clear and transforms are undoable.
+
+| Input | Action |
+| --- | --- |
+| **B / E / F / I / L / R** | Pencil / eraser / fill / picker / line / rectangle |
+| **Right drag / Alt-click** | Erase / sample a color |
+| **Ctrl/Cmd Z / Shift Z / Y** | Undo / redo (keep Ctrl/Cmd held for redo) |
+| **Ctrl/Cmd N / O / S** | New canvas / open PNG / export PNG |
+| **G / M / 0** | Toggle grid / horizontal mirror / fit |
+| **Wheel / − / +** | Zoom |
+| **Space-drag / middle drag** | Pan without painting |
+| **Delete / H or F1** | Clear (undoable) / help |
+| **Enter / Esc** | Confirm / cancel the active dialog or text field |
+
+**Browser:** use Open PNG or drop a PNG onto the canvas. Export downloads `<name>.png`; files stay local, with no server upload. The back arrow returns to Ashfall. There is no automatic browser persistence—export your work before closing the tab.
+
+**Desktop:** drop a PNG onto the window to import; the Open button explains this workflow without adding a platform-specific file-dialog dependency. Export writes `build/sprites/<name>.png` relative to the working directory. The back arrow or window close asks before discarding unexported work. Run the executable from the repository root for the documented export location.
+
+The editor does **not** automatically replace the game’s procedural character art. Animation timelines, layers, spritesheet packing, and game asset integration are outside this first tool.
+
 ## Build requirements
 
 - CMake **3.20+**, a C++17 compiler, and Make or Ninja.
@@ -58,6 +89,10 @@ Then:
 ```sh
 make native
 ./build/native/ashfall
+
+# Build/run just the companion editor:
+make editor
+./build/native/ashfall_sprite_editor
 ```
 
 Or use CMake directly (also works on macOS/Windows):
@@ -67,7 +102,7 @@ cmake -S . -B build/native -DCMAKE_BUILD_TYPE=Release
 cmake --build build/native --config Release --parallel
 ```
 
-With a multi-config Windows generator, the executable is `build/native/Release/ashfall.exe`. On macOS install CMake and Xcode's command-line tools; Raylib uses the system frameworks. The desktop window has a 640 × 480 minimum size.
+With a multi-config Windows generator, the executables are `build/native/Release/ashfall.exe` and `build/native/Release/ashfall_sprite_editor.exe`. On macOS install CMake and Xcode's command-line tools; Raylib uses the system frameworks. The game window has a 640 × 480 minimum size; the editor minimum is 800 × 640.
 
 ### WebAssembly
 
@@ -82,7 +117,11 @@ source ./emsdk_env.sh
 # From this repository:
 make web
 make serve
-# Open http://localhost:8080
+# Game: http://localhost:8080/index.html
+# Editor: http://localhost:8080/editor.html
+
+# Or serve with the editor as the landing page:
+make serve-editor
 ```
 
 Equivalent commands without Make:
@@ -93,9 +132,9 @@ cmake --build build/web --parallel
 python3 tools/serve.py --directory build/web --port 8080
 ```
 
-Serve **all three files together**: `index.html`, `index.js`, and `index.wasm` from `build/web`. Do not open the HTML with `file://`. The included server binds to `0.0.0.0`, sends the correct WASM MIME type, and allows iframe previews and arbitrary preview hosts. Static hosting is sufficient; there is no backend. The browser needs WebGL and WebAssembly, not cross-origin isolation or SharedArrayBuffer.
+Serve **all six files together** from `build/web`: `index.html`, `index.js`, `index.wasm`, `editor.html`, `editor.js`, and `editor.wasm`. The relative links between apps also work when hosted in a subdirectory. Do not open the HTML with `file://`. The included server binds to `0.0.0.0`, sends the correct WASM MIME type, and allows iframe previews and arbitrary preview hosts. Static hosting is sufficient; there is no backend. The browser needs WebGL and WebAssembly, not cross-origin isolation or SharedArrayBuffer.
 
-A release build is approximately **350 KB total, uncompressed** (toolchain dependent). It starts with 32 MiB of WASM linear memory and allows growth. Threads, Asyncify, asset preloading, and Emscripten's filesystem are not used. Audio is intentionally not part of this MVP.
+Release output is approximately **360 KiB for the game** and **430 KiB for the editor**, uncompressed (toolchain dependent). Each app starts with 32 MiB of WASM linear memory and allows growth; navigating between them unloads the other app. Threads, Asyncify, asset preloading, and Emscripten's filesystem are not used. Audio is intentionally not part of this MVP.
 
 ### Existing/offline Raylib
 
@@ -111,7 +150,7 @@ The renderer supports the Raylib **5.5 and 6.0** gradient APIs: 5.5 takes intege
 
 ## Tests
 
-### Display-independent simulation tests
+### Display-independent game and sprite tests
 
 No Raylib, SDK, graphics context, window libraries, or downloads are required:
 
@@ -130,9 +169,11 @@ ctest --test-dir build/tests --output-on-failure
 
 Coverage includes both gradient API call shapes (without a graphics dependency), projection round trips/negative picking, collision and dash tunneling, A* invalid/unreachable/same-tile cases, optimal routing, no diagonal corner cutting, waypoint overshoot, continuous repeated rerouting with swept-corner clearance, equipment cycling/stats/attack speed, single-click target pursuit, cooldown preservation and stable-ID target cleanup, exact attack-sector intersection, cooldowns/invulnerability, one hit per swing, AI pursuit/telegraphs/dodging, death/removal, a complete eight-enemy playthrough, full-level connectivity, and a 100-second simulation stress run with collision and memory-budget invariants.
 
-### Real browser smoke test (optional)
+Sprite tests additionally cover RGBA/hex handling and bounds, connected lines, stroke transactions, saved revisions, undo/redo branching, mirrored paint, bounded fill, transparency, rectangular transforms, the 64-entry history limit, PNG header/dimension preflight, and the procedural starter. `ASHFALL_BUILD_GAME=OFF` disables **both** graphics applications, keeping these tests free of Raylib.
 
-The gameplay build has **no npm dependency**. Playwright is only needed to run this development test:
+### Real browser smoke tests (optional)
+
+Neither application has an npm runtime dependency. Playwright is only needed for these development tests:
 
 ```sh
 emcmake cmake -S . -B build/web -DASHFALL_BUILD_TESTS=OFF -DASHFALL_WEB_TEST_API=ON
@@ -144,11 +185,16 @@ npx playwright install chromium
 make serve
 # In another:
 node tests/browser_smoke.mjs
+node tests/sprite_editor_smoke.mjs
 ```
 
-This drives real mouse/keyboard inputs, checks gear/ASPD stats, blocked-tile picking, repeated mid-tile route replacement, body/feet target picking, a single-click chase and kill at the expected strike interval, live target HP, HUD click-through prevention, cancellation, dodging, pause, guide, restarting, death/removal cleanup, and target-panel layout after canvas resizing. Screenshots go into ignored `build/browser/`. `GAME_URL` overrides the default URL; `PLAYWRIGHT_MODULE`, `CHROMIUM_EXECUTABLE`, and `CHROMIUM_ARGS` support an existing browser installation.
+This drives real mouse/keyboard inputs, checks gear/ASPD stats, blocked-tile picking, repeated mid-tile route replacement, body/feet target picking, a single-click chase and kill at the expected strike interval, live target HP, HUD click-through prevention, cancellation, dodging, pause, guide, restarting, death/removal cleanup, and target-panel layout after canvas resizing. Screenshots go into ignored `build/browser/`. `GAME_URL` overrides the game URL; `EDITOR_URL` overrides the editor URL. `PLAYWRIGHT_MODULE`, `CHROMIUM_EXECUTABLE`, and `CHROMIUM_ARGS` support an existing browser installation.
 
-`ASHFALL_WEB_TEST_API` is **off by default**. It adds only a read-only state snapshot for tests; no teleport, invulnerability, damage, or other test-only mutation is exposed. Turn it off for a normal release.
+The editor test uses real input and the actual C++/WASM app to verify gapless strokes, erasing, picker, mirror, line/rectangle/fill, custom RGBA/name input, PNG downloads and pixel/alpha round-trips, the file picker and drag/drop, destructive-operation guards, rectangular rotation, invalid PNG rejection, responsive layout, anchored zoom, and panning.
+
+CI builds both native apps, compiles both against actual Raylib 5.5/6.0 headers, runs both core suites with/without sanitizers and both browser suites, then rebuilds without diagnostics and runs `node tests/release_smoke.mjs` to verify production startup, PNG export and inter-app navigation. The `ashfall-web` artifact contains both complete apps.
+
+`ASHFALL_WEB_TEST_API` is **off by default**. It adds only a read-only state snapshot for tests; no teleport, invulnerability, damage, or other test-only mutation is exposed. Turn it off for a normal release. `make web` explicitly disables it, including after a diagnostic test build.
 
 ## Architecture
 
@@ -164,10 +210,17 @@ src/
   renderer.h / .cpp        Procedural art, stable Y-sort, HUD, paper doll, UI hit testing
   raylib_compat.h          Compile-time drawing API compatibility (Raylib 5.5/6.0)
   main.cpp                 Raylib input, fixed-step driver, native/web lifecycle
-web/shell.html             Minimal loading/fullscreen canvas shell; no game logic
-tests/core_tests.cpp     Native tests with no third-party test framework
-tests/browser_smoke.mjs  Optional actual-browser integration checks
-tools/serve.py           Preview-safe static server
+  sprite_document.h / .cpp Graphics-independent RGBA document, tools, history, PNG preflight
+  sprite_editor.cpp        Separate Raylib app: editor UI, textures, input, native/web file glue
+web/shell.html             Game loading/fullscreen shell + relative editor link
+web/editor.html            Editor canvas/loading shell + local PNG file input
+tests/core_tests.cpp        Native game tests, no third-party test framework
+tests/sprite_tests.cpp      Native editor-document tests, no graphics dependency
+tests/browser_smoke.mjs     Actual-browser game integration checks
+tests/sprite_editor_smoke.mjs Actual-browser editor/PNG integration checks
+tests/release_smoke.mjs     Production startup/export/navigation without diagnostics
+tests/png_helpers.mjs       Small PNG fixtures/reader used only by browser tests
+tools/serve.py             Preview-safe static server; optional --page editor.html
 ```
 
 ### Coordinate and depth conventions
