@@ -28,6 +28,22 @@ async function until(predicate, label, timeout = 8000) {
   } while (Date.now() < deadline);
   throw new Error(`${label}: ${JSON.stringify(latest)}`);
 }
+async function restart(label) {
+  const serial = (await state()).restartSerial;
+  await page.keyboard.press('KeyR');
+  // Default health/selection values can already be true before the queued key
+  // is processed. Wait for an acknowledgement before reading sprite positions.
+  const fresh = await until(s => s.restartSerial > serial, label);
+  assert.equal(fresh.restartSerial, serial + 1);
+  assert.equal(fresh.health, 120);
+  assert.equal(fresh.kills, 0);
+  assert.equal(fresh.selectedId, 0);
+  assert.equal(fresh.attackSerial, 0);
+  assert.equal(fresh.moving, false);
+  assert.equal(fresh.x, 8.5);
+  assert.equal(fresh.y, 12.5);
+  return fresh;
+}
 async function clickWorld(x, y) {
   const s = await state();
   await page.mouse.click(s.cameraX + ((x - y) * 32 - s.targetX) * s.zoom,
@@ -40,7 +56,10 @@ try {
   assert.equal((await state()).enemies, 8);
   assert.equal((await state()).armor, 8);
   assert.equal(await page.locator('#loading').evaluate(el => el.classList.contains('done')), true);
-  console.log('[PASS] WebGL / WASM startup, eight enemies, initial stats');
+  // Even identical initial states must acknowledge each processed restart.
+  await restart('initial restart acknowledgement');
+  await restart('repeat restart acknowledgement');
+  console.log('[PASS] WebGL / WASM startup, initial stats, repeated restart acknowledgements');
 
   await page.mouse.click(1280, 366); // Head slot, not the ground underneath it.
   await until(s => s.head === 1 && s.armor === 11, 'head slot click');
@@ -91,8 +110,8 @@ try {
   await until(s => s.help, 'field guide');
   await page.mouse.click(720, 620); // Guide's primary button at 1440 x 900.
   await until(s => !s.help, 'field guide button');
-  await page.keyboard.press('KeyR');
-  await until(s => s.health === 120 && s.head === 0 && s.kills === 0, 'restart');
+  await restart('restart');
+  assert.equal((await state()).head, 0);
   await page.keyboard.press('KeyQ');
   assert.equal((await state()).potions, 3); // Full-health flasks must not be consumed.
   console.log('[PASS] Attack, dodge, pause clock, guide, restart, full-health flask');
@@ -112,8 +131,7 @@ try {
   assert.equal((await state()).selectedId, target.id, 'target HUD must not click through to the floor');
   await clickWorld(8.5, 11.5);
   await until(s => s.selectedId === 0 && s.targetHud.width === 0, 'floor click cancels auto-combat');
-  await page.keyboard.press('KeyR');
-  await until(s => s.selectedId === 0 && s.attackSerial === 0 && s.health === 120, 'reset target state');
+  await restart('reset target state');
   console.log('[PASS] Body picking, upper-center target HUD, input capture, floor cancellation');
 
   // One click must chase, stop in melee range, and finish the kill. No held key,
@@ -149,8 +167,7 @@ try {
   await until(s => !s.targets.some(e => e.id === target.id), 'dead target removal');
   console.log('[PASS] Single-click chase, auto-attack cadence, live HP, pause, death/removal cleanup');
 
-  await page.keyboard.press('KeyR');
-  await until(s => s.kills === 0 && s.health === 120, 'final reset');
+  await restart('final reset');
   await page.mouse.move(1085, 180);
   await page.screenshot({ path: `${artifacts}/desktop.png` });
   await page.setViewportSize({ width: 960, height: 720 });
@@ -165,8 +182,7 @@ try {
   await page.keyboard.press('KeyI'); // Hide the overlay inventory on narrow screens.
   await until(s => !s.inventory, 'compact inventory');
   await page.waitForFunction(() => Module.canvas.width === 640 && Module.canvas.height === 560);
-  await page.keyboard.press('KeyR');
-  await until(s => s.selectedId === 0 && s.attackSerial === 0, 'small view reset');
+  await restart('small view reset');
   await clickWorld(9.5, 12.5);
   await until(s => Math.hypot(s.x - 9.5, s.y - 12.5) < 0.06, 'resized picking');
   snapshot = await state();

@@ -17,6 +17,7 @@ public:
     ViewState view;
     Renderer renderer;
     Vec2 aim{10.5f,12.5f};
+    std::uint32_t restartSerial = 0; // Read-only acknowledgement of processed restart inputs.
 
     Application() {
         view.inventory = GetScreenWidth() >= 960;
@@ -29,7 +30,7 @@ public:
             case UiAction::ToggleHelp: view.help = !view.help; break;
             case UiAction::TogglePause: view.paused = !view.paused; break;
             case UiAction::Restart:
-                world.reset(); view.paused = false; view.help = false; accumulator_ = 0;
+                world.reset(); ++restartSerial; view.paused = false; view.help = false; accumulator_ = 0;
                 aim = world.player.position+world.player.facing;
                 world.notify("A new descent. The same oath.",3.0f);
                 break;
@@ -184,7 +185,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
         "\"dashCooldown\":%.3f,\"paused\":%s,\"help\":%s,\"inventory\":%s,\"grid\":%s,"
         "\"screenX\":%.2f,\"screenY\":%.2f,\"cameraX\":%.2f,\"cameraY\":%.2f,"
         "\"targetX\":%.2f,\"targetY\":%.2f,\"zoom\":%.4f,\"elapsed\":%.3f,"
-        "\"selectedId\":%u,\"targetAction\":%d,\"selectedHealth\":%d,\"selectedMaxHealth\":%d,"
+        "\"restartSerial\":%u,\"selectedId\":%u,\"targetAction\":%d,\"selectedHealth\":%d,\"selectedMaxHealth\":%d,"
         "\"attackSerial\":%u,\"attackInterval\":%.4f,\"attackSpeed\":%.3f,\"attackCooldown\":%.4f,"
         "\"targetHud\":{\"x\":%.2f,\"y\":%.2f,\"width\":%.2f,\"height\":%.2f},\"targets\":[",
         player.health,player.potions,player.equipment.armor(),player.equipment.variant(ashfall::EquipmentSlot::Head),
@@ -195,7 +196,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
         app->view.showGrid?"true":"false",static_cast<double>(screen.x),static_cast<double>(screen.y),
         static_cast<double>(camera.offset.x),static_cast<double>(camera.offset.y),
         static_cast<double>(camera.target.x),static_cast<double>(camera.target.y),static_cast<double>(camera.zoom),
-        static_cast<double>(world.elapsed),world.selectedEnemyId(),static_cast<int>(world.targetAction()),
+        static_cast<double>(world.elapsed),app->restartSerial,world.selectedEnemyId(),static_cast<int>(world.targetAction()),
         selected?selected->health:0,selected?selected->maxHealth:0,player.attack.serial,
         static_cast<double>(player.attackInterval()),static_cast<double>(player.attackSpeed()),
         static_cast<double>(player.attack.cooldown),static_cast<double>(hud.x),static_cast<double>(hud.y),
