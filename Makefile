@@ -3,15 +3,19 @@ BUILD_TYPE ?= Release
 JOBS ?= 4
 PORT ?= 8080
 
-.PHONY: all native web test sanitize serve clean
+.PHONY: all native editor web test sanitize serve serve-editor clean
 all: native
 
 native:
 	$(CMAKE) -S . -B build/native -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
 	$(CMAKE) --build build/native --parallel $(JOBS)
 
+editor:
+	$(CMAKE) -S . -B build/native -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
+	$(CMAKE) --build build/native --target ashfall_sprite_editor --parallel $(JOBS)
+
 web:
-	emcmake $(CMAKE) -S . -B build/web -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) -DASHFALL_BUILD_TESTS=OFF
+	emcmake $(CMAKE) -S . -B build/web -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) -DASHFALL_BUILD_TESTS=OFF -DASHFALL_WEB_TEST_API=OFF
 	$(CMAKE) --build build/web --parallel $(JOBS)
 
 test:
@@ -26,6 +30,9 @@ sanitize:
 
 serve:
 	python3 tools/serve.py --port $(PORT) --directory build/web
+
+serve-editor:
+	python3 tools/serve.py --port $(PORT) --directory build/web --page editor.html
 
 clean:
 	$(CMAKE) -E rm -rf build

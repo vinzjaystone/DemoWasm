@@ -11,8 +11,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
 endif()
 
-option(ASHFALL_BUILD_GAME "Build the Raylib application" ON)
-option(ASHFALL_BUILD_TESTS "Build display-independent simulation tests" ON)
+option(ASHFALL_BUILD_GAME "Build the Raylib game and companion sprite editor" ON)
+option(ASHFALL_BUILD_TESTS "Build display-independent simulation and sprite tests" ON)
 option(ASHFALL_FETCH_RAYLIB "Fetch pinned Raylib when no installed package is found" ON)
 option(ASHFALL_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 option(ASHFALL_WEB_TEST_API "Expose read-only browser diagnostics for smoke tests" OFF)
@@ -25,16 +25,19 @@ add_library(ashfall_core
     src/combat.cpp
     src/world.cpp
 )
-target_include_directories(ashfall_core PUBLIC src)
-if(MSVC)
-    target_compile_options(ashfall_core PRIVATE /W4 /permissive-)
-else()
-    target_compile_options(ashfall_core PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
-endif()
-if(ASHFALL_SANITIZERS AND NOT EMSCRIPTEN AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(ashfall_core PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
-    target_link_options(ashfall_core PUBLIC -fsanitize=address,undefined)
-endif()
+add_library(ashfall_sprite_core src/sprite_document.cpp)
+foreach(core ashfall_core ashfall_sprite_core)
+    target_include_directories(${core} PUBLIC src)
+    if(MSVC)
+        target_compile_options(${core} PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(${core} PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+    endif()
+    if(ASHFALL_SANITIZERS AND NOT EMSCRIPTEN AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${core} PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(${core} PUBLIC -fsanitize=address,undefined)
+    endif()
+endforeach()
 
 if(ASHFALL_BUILD_GAME)
     if(EMSCRIPTEN)
@@ -62,30 +65,41 @@ if(ASHFALL_BUILD_GAME)
     endif()
     add_executable(ashfall src/main.cpp src/renderer.cpp)
     target_link_libraries(ashfall PRIVATE ashfall_core raylib)
-    if(MSVC)
-        target_compile_options(ashfall PRIVATE /W4 /permissive-)
-    else()
-        target_compile_options(ashfall PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
-    endif()
-    if(EMSCRIPTEN)
-        set_target_properties(ashfall PROPERTIES OUTPUT_NAME index SUFFIX .html)
-        target_link_options(ashfall PRIVATE
-            "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
-            -sUSE_GLFW=3
-            -sALLOW_MEMORY_GROWTH=1
-            -sINITIAL_MEMORY=33554432
-            -sSTACK_SIZE=1048576
-            -sENVIRONMENT=web
-            -sFILESYSTEM=0
-            -sEXIT_RUNTIME=0
-            "$<$<CONFIG:Debug>:-sASSERTIONS=2>"
-        )
-        set_property(TARGET ashfall APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
-        if(ASHFALL_WEB_TEST_API)
-            target_compile_definitions(ashfall PRIVATE ASHFALL_WEB_TEST_API=1)
-            target_link_options(ashfall PRIVATE "-sEXPORTED_RUNTIME_METHODS=['UTF8ToString']")
+    add_executable(ashfall_sprite_editor src/sprite_editor.cpp)
+    target_link_libraries(ashfall_sprite_editor PRIVATE ashfall_sprite_core raylib)
+    foreach(app ashfall ashfall_sprite_editor)
+        if(MSVC)
+            target_compile_options(${app} PRIVATE /W4 /permissive-)
+        else()
+            target_compile_options(${app} PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
         endif()
-    endif()
+        if(EMSCRIPTEN)
+            if(app STREQUAL "ashfall")
+                set(page index)
+                set(shell "${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")
+            else()
+                set(page editor)
+                set(shell "${CMAKE_CURRENT_SOURCE_DIR}/web/editor.html")
+            endif()
+            set_target_properties(${app} PROPERTIES OUTPUT_NAME ${page} SUFFIX .html)
+            target_link_options(${app} PRIVATE
+                "--shell-file=${shell}"
+                -sUSE_GLFW=3
+                -sALLOW_MEMORY_GROWTH=1
+                -sINITIAL_MEMORY=33554432
+                -sSTACK_SIZE=1048576
+                -sENVIRONMENT=web
+                -sFILESYSTEM=0
+                -sEXIT_RUNTIME=0
+                "$<$<CONFIG:Debug>:-sASSERTIONS=2>"
+            )
+            set_property(TARGET ${app} APPEND PROPERTY LINK_DEPENDS "${shell}")
+            if(ASHFALL_WEB_TEST_API)
+                target_compile_definitions(${app} PRIVATE ASHFALL_WEB_TEST_API=1)
+                target_link_options(${app} PRIVATE "-sEXPORTED_RUNTIME_METHODS=['UTF8ToString']")
+            endif()
+        endif()
+    endforeach()
 endif()
 
 if(ASHFALL_BUILD_TESTS AND NOT EMSCRIPTEN)
@@ -93,4 +107,7 @@ if(ASHFALL_BUILD_TESTS AND NOT EMSCRIPTEN)
     add_executable(ashfall_tests tests/core_tests.cpp)
     target_link_libraries(ashfall_tests PRIVATE ashfall_core)
     add_test(NAME ashfall_core COMMAND ashfall_tests)
+    add_executable(ashfall_sprite_tests tests/sprite_tests.cpp)
+    target_link_libraries(ashfall_sprite_tests PRIVATE ashfall_sprite_core)
+    add_test(NAME ashfall_sprite_core COMMAND ashfall_sprite_tests)
 endif()
