@@ -238,6 +238,122 @@ void smoothRetargeting() {
     }
     CHECK(distance(p,TileCoord{6,2}.center())<0.03f);
 }
+// Repeating a ground command must be idempotent at the tile level, including
+// mid-turn, when entering the goal tile, and when an obstacle forces a detour.
+void repeatedGroundCommands() {
+    for (int scenario=0;scenario<3;++scenario) {
+        Grid grid=scenario==2 ? Grid::sanctum() : Grid(20,20);
+        const Vec2 spawn=scenario==2 ? Vec2{8.5f,12.5f} : Vec2{1.5f,1.5f};
+        const TileCoord goal=scenario==0 ? TileCoord{7,4} : (scenario==1 ? TileCoord{14,2} : TileCoord{15,5});
+        World once(grid,spawn,{}), repeated=once;
+        CHECK(once.movePlayerTo(goal.center()));
+        CHECK(repeated.movePlayerTo(goal.center()));
+        bool enteredGoal=false;
+        for (int frame=0;frame<1800;++frame) {
+            const Vec2 position=repeated.player.position;
+            if (tileAt(position)==goal && repeated.player.navigation.moving()) enteredGoal=true;
+            if (frame%3==0) {
+                // Different points inside the same diamond are still the same command.
+                const Vec2 target=goal.center()+Vec2{frame%2==0?-0.3f:0.3f,frame%2==0?0.2f:-0.2f};
+                const auto next=repeated.player.navigation.next;
+                const auto waypoints=repeated.player.navigation.waypoints;
+                CHECK(repeated.movePlayerTo(target));
+                CHECK(distance(repeated.player.position,position)<0.000001f);
+                CHECK(repeated.lastPathVisited==0);
+                if (next<waypoints.size()) {
+                    CHECK(repeated.player.navigation.next==next);
+                    CHECK(repeated.player.navigation.waypoints.size()==waypoints.size());
+                    for (std::size_t i=0;i<waypoints.size();++i)
+                        CHECK(distance(repeated.player.navigation.waypoints[i],waypoints[i])<0.000001f);
+                }
+            }
+            once.update(1.0f/120.0f);
+            repeated.update(1.0f/120.0f);
+            CHECK(distance(once.player.position,repeated.player.position)<0.000001f);
+            CHECK(grid.canOccupy(repeated.player.position,Player::Radius));
+        }
+        CHECK(enteredGoal);
+        CHECK(!repeated.player.navigation.moving());
+        CHECK(distance(repeated.player.position,goal.center())<0.001f);
+        // Clicking again after arrival must not create a fake movement step.
+        CHECK(repeated.movePlayerTo(goal.center()));
+        CHECK(!repeated.player.navigation.moving());
+    }
+}
+void occupiedTileCommands() {
+    World world(Grid(12,10),{3.8f,3.5f},{});
+    CHECK(world.movePlayerTo({9.5f,3.5f}));
+    world.update(1.0f/120.0f);
+    CHECK(world.player.position.x>3.8f);
+    const Vec2 stop=world.player.position;
+    CHECK(tileAt(stop)==TileCoord{3,3});
+    for (int i=0;i<120;++i) {
+        CHECK(world.movePlayerTo({3.2f,3.8f}));
+        CHECK(world.click.valid && !world.player.navigation.moving());
+        world.update(1.0f/120.0f);
+        CHECK(distance(world.player.position,stop)<0.000001f);
+    }
+    CHECK(world.movePlayerTo({9.5f,3.5f}));
+    CHECK(world.player.navigation.moving()); // A different destination still works.
+
+    World combat(Grid(12,10),{3.8f,3.5f},{{{4.7f,3.5f}}});
+    CHECK(combat.selectEnemy(combat.enemies.front().id));
+    CHECK(combat.player.attack.active);
+    const float cooldown=combat.player.attack.cooldown;
+    CHECK(combat.movePlayerTo({3.1f,3.1f}));
+    CHECK(!combat.selectedEnemy() && combat.selectedEnemyId()==0);
+    CHECK(!combat.player.attack.active && !combat.player.navigation.moving());
+    CHECK(combat.player.attack.cooldown==cooldown); // Stop intent never resets ASPD.
+}
+void groundRouteInvalidation() {
+    World world(Grid(12,10),{1.5f,3.5f},{});
+    const Vec2 goal{9.5f,3.5f};
+    CHECK(world.movePlayerTo(goal));
+    tick(world,0.1f);
+    const auto next=world.player.navigation.next;
+    const auto count=world.player.navigation.waypoints.size();
+    // Rejecting a different, invalid command must leave the active route intact.
+    CHECK(!world.movePlayerTo({-1,3.5f}) && !world.click.valid);
+    CHECK(world.player.navigation.next==next && world.player.navigation.waypoints.size()==count);
+    CHECK(world.movePlayerTo(goal) && world.lastPathVisited==0);
+
+    // A duplicate destination is not permission to keep a stale, blocked path.
+    // The first leg is still clear; this obstacle is farther along the route.
+    world.grid.set({5,3},TileKind::Column);
+    CHECK(world.movePlayerTo(goal));
+    CHECK(world.lastPathVisited>0);
+    CHECK(world.player.navigation.canContinueTo(tileAt(goal),world.player.position,world.grid,Player::Radius));
+    for (int i=0;i<600;++i) {
+        world.update(1.0f/120.0f);
+        CHECK(world.grid.canOccupy(world.player.position,Player::Radius));
+    }
+    CHECK(distance(world.player.position,goal)<0.001f);
+
+    // Knockback can put the actor on the other side of a wall from its next
+    // waypoint even when all remaining waypoint centers are walkable.
+    World displaced(Grid(12,10),{1.5f,3.5f},{});
+    CHECK(displaced.movePlayerTo(goal));
+    displaced.grid.set({2,2},TileKind::Column);
+    displaced.player.position={2.5f,1.5f};
+    CHECK(!displaced.player.navigation.canContinueTo(tileAt(goal),displaced.player.position,displaced.grid,Player::Radius));
+    CHECK(displaced.movePlayerTo(goal) && displaced.lastPathVisited>0);
+    tick(displaced,4);
+    CHECK(distance(displaced.player.position,goal)<0.001f);
+    CHECK(displaced.dashTo({10.5f,3.5f}));
+    CHECK(!displaced.player.navigation.moving());
+    tick(displaced,0.3f);
+    CHECK(displaced.movePlayerTo(goal)); // Clearing the route cannot leave a cached goal behind.
+    CHECK(displaced.player.navigation.moving());
+
+    // A ground click on the chase's goal tile is a new intent, not a duplicate
+    // ground command. Cancel selection and recovery must not be bypassed.
+    World chasing(Grid(14,10),{1.5f,4.5f},{{{9.5f,4.5f}}});
+    CHECK(chasing.selectEnemy(chasing.enemies.front().id));
+    CHECK(chasing.movePlayerTo({9.2f,4.8f}));
+    CHECK(chasing.selectedEnemyId()==0 && chasing.player.navigation.moving());
+    CHECK(chasing.lastPathVisited>0);
+    CHECK(!chasing.player.attack.active && chasing.player.attack.serial==0);
+}
 void targetedCombat() {
     World world(Grid(14,10),{1.5f,4.5f},{{{9.5f,4.5f}}});
     const auto id = world.enemies.front().id;
@@ -541,6 +657,9 @@ int main() {
         {"A* basic cases", pathBasics}, {"A* maze and no corner cutting", pathCornersAndMaze},
         {"A* optimality vs Dijkstra on 80 maps", optimalPaths},
         {"continuous rerouting and swept corner clearance", smoothRetargeting},
+        {"idempotent repeated destination clicks", repeatedGroundCommands},
+        {"occupied-tile clicks stop without recentering", occupiedTileCommands},
+        {"duplicate-route invalidation and chase-to-ground intent", groundRouteInvalidation},
         {"click target chase, timed attacks, cancellation, and death", targetedCombat},
         {"stable target IDs and equipment attack speed", targetIdentityAndAttackSpeed},
         {"moving targets and wall-occluded melee", targetRepathAndOcclusion},

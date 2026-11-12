@@ -66,6 +66,14 @@ PathResult Pathfinder::find(const Grid& grid, TileCoord start, TileCoord goal) {
     }
     return result;
 }
+bool Navigation::canContinueTo(TileCoord goal, Vec2 position, const Grid& grid, float radius) const {
+    if (!moving() || tileAt(waypoints.back()) != goal) return false;
+    for (std::size_t i = next; i < waypoints.size(); ++i) {
+        if (!grid.clearSegment(position,waypoints[i],radius)) return false;
+        position = waypoints[i];
+    }
+    return true;
+}
 void Navigation::assign(const PathResult& result, Vec2 position, const Grid& grid, float radius) {
     clear();
     if (!result.succeeded()) return;
