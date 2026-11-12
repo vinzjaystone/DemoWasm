@@ -181,6 +181,14 @@ try {
   console.log(`All browser checks passed. Screenshots: ${artifacts}`);
 } catch (error) {
   console.error(error);
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    // Keep the failing assertion and state accessible in check annotations even
+    // when the runner's downloadable log/archive service is unavailable.
+    const snapshot = await state().catch(() => null);
+    const details = `${error.stack || error}\nState: ${JSON.stringify(snapshot)}`
+      .replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+    console.log(`::error title=Browser smoke test::${details}`);
+  }
   await page.screenshot({ path: `${artifacts}/failure.png` }).catch(() => {});
   process.exitCode = 1;
 } finally {
