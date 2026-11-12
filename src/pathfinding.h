@@ -34,6 +34,9 @@ struct Navigation {
     std::size_t next = 0;
     void clear() { waypoints.clear(); next = 0; }
     bool moving() const { return next < waypoints.size(); }
+    // Reuse a duplicate tile command only while the remaining route is still
+    // collision-safe from the actor's actual position (including after knockback).
+    bool canContinueTo(TileCoord goal, Vec2 currentPosition, const Grid& grid, float radius) const;
     void assign(const PathResult& result, Vec2 currentPosition, const Grid& grid, float radius);
     Vec2 advance(const Grid& grid, Vec2 position, float speed, float dt, float radius);
 };

@@ -18,6 +18,7 @@ public:
     Renderer renderer;
     Vec2 aim{10.5f,12.5f};
     std::uint32_t restartSerial = 0; // Read-only acknowledgement of processed restart inputs.
+    std::uint32_t groundSerial = 0; // Acknowledge ground clicks separately from simulation time.
 
     Application() {
         view.inventory = GetScreenWidth() >= 960;
@@ -97,7 +98,10 @@ public:
             else if (renderer.sceneContains(point,world,view)) {
                 const std::uint32_t enemy = renderer.pickEnemy(point,world);
                 if (enemy!=0) world.selectEnemy(enemy);
-                else world.movePlayerTo(renderer.screenToWorld(point));
+                else {
+                    world.movePlayerTo(renderer.screenToWorld(point));
+                    ++groundSerial;
+                }
             }
         }
         const bool running = !view.paused && !view.help && world.player.alive() && !world.cleared();
@@ -181,22 +185,24 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
     const auto* selected = world.selectedEnemy();
     const int n = std::snprintf(json,sizeof(json),
         "{\"health\":%d,\"potions\":%d,\"armor\":%d,\"head\":%d,\"body\":%d,\"boots\":%d,"
-        "\"x\":%.4f,\"y\":%.4f,\"moving\":%s,\"kills\":%d,\"enemies\":%d,\"attack\":%s,"
+        "\"x\":%.4f,\"y\":%.4f,\"moving\":%s,\"pathSize\":%zu,\"pathNext\":%zu,\"pathVisited\":%zu,"
+        "\"kills\":%d,\"enemies\":%d,\"attack\":%s,"
         "\"dashCooldown\":%.3f,\"paused\":%s,\"help\":%s,\"inventory\":%s,\"grid\":%s,"
         "\"screenX\":%.2f,\"screenY\":%.2f,\"cameraX\":%.2f,\"cameraY\":%.2f,"
         "\"targetX\":%.2f,\"targetY\":%.2f,\"zoom\":%.4f,\"elapsed\":%.3f,"
-        "\"restartSerial\":%u,\"selectedId\":%u,\"targetAction\":%d,\"selectedHealth\":%d,\"selectedMaxHealth\":%d,"
+        "\"restartSerial\":%u,\"groundSerial\":%u,\"selectedId\":%u,\"targetAction\":%d,\"selectedHealth\":%d,\"selectedMaxHealth\":%d,"
         "\"attackSerial\":%u,\"attackInterval\":%.4f,\"attackSpeed\":%.3f,\"attackCooldown\":%.4f,"
         "\"targetHud\":{\"x\":%.2f,\"y\":%.2f,\"width\":%.2f,\"height\":%.2f},\"targets\":[",
         player.health,player.potions,player.equipment.armor(),player.equipment.variant(ashfall::EquipmentSlot::Head),
         player.equipment.variant(ashfall::EquipmentSlot::Armor),player.equipment.variant(ashfall::EquipmentSlot::Boots),
         static_cast<double>(player.position.x),static_cast<double>(player.position.y),player.navigation.moving()?"true":"false",
+        player.navigation.waypoints.size(),player.navigation.next,world.lastPathVisited,
         world.kills,world.livingEnemies(),player.attack.active?"true":"false",static_cast<double>(player.dashCooldown),
         app->view.paused?"true":"false",app->view.help?"true":"false",app->view.inventory?"true":"false",
         app->view.showGrid?"true":"false",static_cast<double>(screen.x),static_cast<double>(screen.y),
         static_cast<double>(camera.offset.x),static_cast<double>(camera.offset.y),
         static_cast<double>(camera.target.x),static_cast<double>(camera.target.y),static_cast<double>(camera.zoom),
-        static_cast<double>(world.elapsed),app->restartSerial,world.selectedEnemyId(),static_cast<int>(world.targetAction()),
+        static_cast<double>(world.elapsed),app->restartSerial,app->groundSerial,world.selectedEnemyId(),static_cast<int>(world.targetAction()),
         selected?selected->health:0,selected?selected->maxHealth:0,player.attack.serial,
         static_cast<double>(player.attackInterval()),static_cast<double>(player.attackSpeed()),
         static_cast<double>(player.attack.cooldown),static_cast<double>(hud.x),static_cast<double>(hud.y),

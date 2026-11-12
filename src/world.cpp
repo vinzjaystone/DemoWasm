@@ -42,15 +42,24 @@ bool World::movePlayerTo(Vec2 target) {
     if (!player.alive() || !finite(target)) return false;
     const TileCoord destination = tileAt(target);
     click = {destination.center(), 0.8f, false};
-    PathResult path = pathfinder_.find(grid, tileAt(player.position), destination);
-    lastPathVisited = path.visited;
-    if (!path.succeeded()) {
-        notify(grid.walkable(destination) ? "No path through the ruins." : "The way is blocked.");
-        return false;
+    lastPathVisited = 0;
+    // Ground destinations are tiles, not individual mouse positions. Repeating
+    // the active command must not rewind its waypoint cursor or change a turn
+    // halfway through a tile. A chase-to-ground switch must still cancel combat.
+    if (selectedEnemyId_ != 0 || !player.navigation.canContinueTo(destination,player.position,grid,Player::Radius)) {
+        const PathResult path = pathfinder_.find(grid, tileAt(player.position), destination);
+        lastPathVisited = path.visited;
+        if (!path.succeeded()) {
+            notify(grid.walkable(destination) ? "No path through the ruins." : "The way is blocked.");
+            return false;
+        }
+        clearTarget();
+        // A new command for the occupied tile means stop here, not walk back
+        // to its center. Duplicate active goals above still finish their final leg.
+        if (path.status == PathStatus::AlreadyAtGoal) player.navigation.clear();
+        else player.navigation.assign(path, player.position, grid, Player::Radius);
     }
-    clearTarget();
     player.attack.active = false; // A new ground command interrupts the windup, not the shared cooldown.
-    player.navigation.assign(path, player.position, grid, Player::Radius);
     click.valid = true;
     return true;
 }

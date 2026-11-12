@@ -32,7 +32,9 @@ Click a living monster's **body or feet** once—no held attack key is needed. T
 
 Default cadence is **one strike every 2.5 seconds**. Equipment changes attack speed (ASPD): `interval = 2.5 / (1 + sum(ASPD bonuses))`. The current catalog spans **2.0–2.78 seconds** per strike; the character panel displays the multiplier and interval. The short swing animation is separate from recovery, and every third consecutive strike still performs a stronger cleave. Repeated target clicks, switching targets, and changing equipment **do not reset the current cooldown**.
 
-A valid ground command, a dash, or a manual attack cancels auto-combat. Target death, player death, and restarting clear the selection; pausing preserves it without advancing combat timers. Unreachable monsters show “NO PATH” rather than swinging through walls. Enemy recovery has also been paced for the slower player cadence while retaining its windup/telegraph.
+Ground destinations are tile-based: clicking the **same destination tile again** preserves the active route and its waypoint progress, including the final approach. Clicking the **tile you currently occupy** as a new destination stops in place rather than pulling you back to its center. A genuinely different destination still replaces the route immediately.
+
+A valid ground command (including a stop in the occupied tile), a dash, or a manual attack cancels auto-combat. Target death, player death, and restarting clear the selection; pausing preserves it without advancing combat timers. Unreachable monsters show “NO PATH” rather than swinging through walls. Enemy recovery has also been paced for the slower player cadence while retaining its windup/telegraph.
 
 ### Live equipment
 
@@ -167,7 +169,7 @@ cmake --build build/tests --parallel
 ctest --test-dir build/tests --output-on-failure
 ```
 
-Coverage includes both gradient API call shapes (without a graphics dependency), projection round trips/negative picking, collision and dash tunneling, A* invalid/unreachable/same-tile cases, optimal routing, no diagonal corner cutting, waypoint overshoot, continuous repeated rerouting with swept-corner clearance, equipment cycling/stats/attack speed, single-click target pursuit, cooldown preservation and stable-ID target cleanup, exact attack-sector intersection, cooldowns/invulnerability, one hit per swing, AI pursuit/telegraphs/dodging, death/removal, a complete eight-enemy playthrough, full-level connectivity, and a 100-second simulation stress run with collision and memory-budget invariants.
+Coverage includes both gradient API call shapes (without a graphics dependency), projection round trips/negative picking, collision and dash tunneling, A* invalid/unreachable/same-tile cases, optimal routing, no diagonal corner cutting, waypoint overshoot, continuous repeated rerouting with swept-corner clearance, same-destination spam vs. single-click trajectory equivalence, occupied-tile stopping, blocked/displaced route invalidation, equipment cycling/stats/attack speed, single-click target pursuit, cooldown preservation and stable-ID target cleanup, exact attack-sector intersection, cooldowns/invulnerability, one hit per swing, AI pursuit/telegraphs/dodging, death/removal, a complete eight-enemy playthrough, full-level connectivity, and a 100-second simulation stress run with collision and memory-budget invariants.
 
 Sprite tests additionally cover RGBA/hex handling and bounds, connected lines, stroke transactions, saved revisions, undo/redo branching, mirrored paint, bounded fill, transparency, rectangular transforms, the 64-entry history limit, PNG header/dimension preflight, and the procedural starter. `ASHFALL_BUILD_GAME=OFF` disables **both** graphics applications, keeping these tests free of Raylib.
 
@@ -188,7 +190,7 @@ node tests/browser_smoke.mjs
 node tests/sprite_editor_smoke.mjs
 ```
 
-This drives real mouse/keyboard inputs, checks gear/ASPD stats, blocked-tile picking, repeated mid-tile route replacement, body/feet target picking, a single-click chase and kill at the expected strike interval, live target HP, HUD click-through prevention, cancellation, dodging, pause, guide, restarting, death/removal cleanup, and target-panel layout after canvas resizing. Screenshots go into ignored `build/browser/`. `GAME_URL` overrides the game URL; `EDITOR_URL` overrides the editor URL. `PLAYWRIGHT_MODULE`, `CHROMIUM_EXECUTABLE`, and `CHROMIUM_ARGS` support an existing browser installation.
+This drives real mouse/keyboard inputs, checks gear/ASPD stats, blocked-tile picking, repeated mid-tile route replacement, same-destination/occupied-tile click spam without recentering or waypoint resets, body/feet target picking, a single-click chase and kill at the expected strike interval, live target HP, HUD click-through prevention, cancellation, dodging, pause, guide, restarting, death/removal cleanup, and target-panel layout after canvas resizing. Screenshots go into ignored `build/browser/`. `GAME_URL` overrides the game URL; `EDITOR_URL` overrides the editor URL. `PLAYWRIGHT_MODULE`, `CHROMIUM_EXECUTABLE`, and `CHROMIUM_ARGS` support an existing browser installation.
 
 The editor test uses real input and the actual C++/WASM app to verify gapless strokes, erasing, picker, mirror, line/rectangle/fill, custom RGBA/name input, PNG downloads and pixel/alpha round-trips, the file picker and drag/drop, destructive-operation guards, rectangular rotation, invalid PNG rejection, responsive layout, anchored zoom, and panning.
 

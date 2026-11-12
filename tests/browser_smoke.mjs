@@ -48,6 +48,7 @@ async function clickWorld(x, y) {
   const s = await state();
   await page.mouse.click(s.cameraX + ((x - y) * 32 - s.targetX) * s.zoom,
     s.cameraY + ((x + y) * 16 - s.targetY) * s.zoom);
+  return s;
 }
 try {
   await page.goto(process.env.GAME_URL || 'http://127.0.0.1:8080/index.html', { waitUntil: 'networkidle' });
@@ -92,6 +93,50 @@ try {
   await clickWorld(9.5, 12.5); // Reverse direction and arrive using only the newest command.
   await until(s => Math.hypot(s.x - 9.5, s.y - 12.5) < 0.06 && !s.moving, 'replacement route arrival');
   console.log('[PASS] Obstacle rejection, isometric picking, repeated mid-tile route replacement');
+
+  await restart('same-tile movement regression setup');
+  // Use the clear corridor above spawn, away from enemy sprite-body hitboxes.
+  await clickWorld(8.5, 10.5);
+  let route = await until(s => s.moving && s.pathSize > 0, 'initial destination route');
+  const pathSize = route.pathSize;
+  for (let click = 0; click < 6; ++click) {
+    // Points vary within a diamond; tile identity, not raw cursor coordinates,
+    // determines whether this is the same destination command.
+    const command = await clickWorld(click % 2 === 0 ? 8.2 : 8.8, click % 2 === 0 ? 10.7 : 10.3);
+    // An elapsed-time predicate may already be true before the click is handled.
+    const next = await until(s => s.groundSerial > command.groundSerial, 'duplicate destination processed');
+    assert.equal(next.selectedId, 0, 'this regression uses ground clicks, not monster selection');
+    assert.ok(next.y <= route.y + 0.0002, 'duplicate clicks must not pull the player back');
+    assert.ok(Math.abs(next.x - 8.5) < 0.001);
+    assert.equal(next.pathVisited, 0, 'a duplicate destination must not rerun A*');
+    if (next.moving) {
+      assert.equal(next.pathSize, pathSize, 'preserve the original route');
+      assert.ok(next.pathNext >= route.pathNext, 'never rewind a waypoint cursor');
+    }
+    route = next;
+  }
+  await until(s => !s.moving && Math.abs(s.y - 10.5) < 0.001, 'repeated-click final approach');
+  console.log('[PASS] Same-destination spam preserves waypoint progress and final arrival');
+
+  await restart('occupied-tile stop setup');
+  await clickWorld(8.5, 10.5);
+  const beforeStop = await until(s => s.moving && s.y < 12.38 && s.y > 12.05, 'off-center player inside the starting tile');
+  const stopCommand = await clickWorld(8.2, 12.8);
+  let stopped = await until(s => s.groundSerial > stopCommand.groundSerial && !s.moving, 'occupied-tile command stops in place');
+  assert.ok(stopped.y <= beforeStop.y + 0.0002, 'stop cannot recenter backwards');
+  assert.ok(stopped.y >= 12, 'the stop remains in the occupied tile');
+  for (let click = 0; click < 4; ++click) {
+    const command = await clickWorld(click % 2 === 0 ? 8.2 : 8.8, 12.7);
+    const next = await until(s => s.groundSerial > command.groundSerial, 'repeated occupied-tile click');
+    assert.equal(next.moving, false);
+    assert.equal(next.pathSize, 0);
+    assert.equal(next.x, stopped.x);
+    assert.equal(next.y, stopped.y);
+    stopped = next;
+  }
+  await clickWorld(8.5, 11.5);
+  await until(s => !s.moving && Math.abs(s.y - 11.5) < 0.001, 'new destination after stopping');
+  console.log('[PASS] Occupied-tile spam stops without recentering; a different tile still moves');
 
   await page.keyboard.down('Space');
   await until(s => s.attack, 'attack input');
