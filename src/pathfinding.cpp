@@ -66,15 +66,17 @@ PathResult Pathfinder::find(const Grid& grid, TileCoord start, TileCoord goal) {
     }
     return result;
 }
-void Navigation::assign(const PathResult& result, Vec2 position) {
+void Navigation::assign(const PathResult& result, Vec2 position, const Grid& grid, float radius) {
     clear();
     if (!result.succeeded()) return;
-    // Re-center before turning. Rerouting halfway between tiles cannot then
-    // draw a diagonal through the corner of an adjacent blocked cell.
     const Vec2 center = tileAt(position).center();
-    if (distance(position, center) > 0.025f) waypoints.push_back(center);
-    waypoints.insert(waypoints.end(), result.waypoints.begin(), result.waypoints.end());
-    if (result.status == PathStatus::AlreadyAtGoal && waypoints.empty()) waypoints.push_back(center);
+    // Splice the new route onto the actual moving position. Only fall back to
+    // the current tile center if the direct turn would clip a blocked corner.
+    // Repeated clicks never otherwise pull the actor back to a previous center.
+    if (!result.waypoints.empty() && distance(position,center) > 0.025f &&
+        !grid.clearSegment(position,result.waypoints.front(),radius)) waypoints.push_back(center);
+    waypoints.insert(waypoints.end(),result.waypoints.begin(),result.waypoints.end());
+    if (result.status == PathStatus::AlreadyAtGoal) waypoints.push_back(center);
 }
 Vec2 Navigation::advance(const Grid& grid, Vec2 p, float speed, float dt, float radius) {
     float budget = std::max(0.0f, speed * dt);

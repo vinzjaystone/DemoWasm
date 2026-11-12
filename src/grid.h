@@ -39,6 +39,8 @@ public:
     void set(TileCoord tile, TileKind kind);
 
     bool canOccupy(Vec2 position, float radius) const;
+    // Swept-circle clearance along the entire segment, including tile corners.
+    bool clearSegment(Vec2 from, Vec2 to, float radius) const;
     // Substepping prevents tunneling during dashes/knockback. Axis separation
     // permits sliding along obstacles, including the outside of the level.
     Vec2 moveWithCollision(Vec2 from, Vec2 displacement, float radius) const;

@@ -32,6 +32,7 @@ struct ClickMarker {
     bool valid = false;
 };
 struct EnemySpawn { Vec2 position; EnemyKind kind = EnemyKind::Hollow; };
+enum class TargetAction { None, Chasing, Attacking, Unreachable };
 
 // The simulation owns every entity and effect. Rendering/input are deliberately
 // separate, so this class also runs unmodified in display-independent tests.
@@ -42,6 +43,11 @@ public:
     void reset();
     void update(float dt);
     bool movePlayerTo(Vec2 target);
+    bool selectEnemy(std::uint32_t id);
+    void clearTarget();
+    const Enemy* selectedEnemy() const;
+    std::uint32_t selectedEnemyId() const { return selectedEnemyId_; }
+    TargetAction targetAction() const { return targetAction_; }
     bool attackAt(Vec2 target);
     bool dashTo(Vec2 target);
     bool heal();
@@ -70,6 +76,11 @@ public:
 
 private:
     Pathfinder pathfinder_;
+    std::uint32_t selectedEnemyId_ = 0; // IDs survive vector erasure/reallocation; never store a target pointer.
+    TargetAction targetAction_ = TargetAction::None;
+    float targetRepath_ = 0;
+    TileCoord targetGoal_{-1,-1};
+    void updateTargetCombat(float dt);
     std::uint32_t nextEnemyId_ = 1;
     std::uint32_t effectSequence_ = 1;
     void updateEnemies(float dt);

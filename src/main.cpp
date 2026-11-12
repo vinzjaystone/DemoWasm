@@ -17,6 +17,7 @@ public:
     ViewState view;
     Renderer renderer;
     Vec2 aim{10.5f,12.5f};
+    std::uint32_t restartSerial = 0; // Read-only acknowledgement of processed restart inputs.
 
     Application() {
         view.inventory = GetScreenWidth() >= 960;
@@ -29,7 +30,7 @@ public:
             case UiAction::ToggleHelp: view.help = !view.help; break;
             case UiAction::TogglePause: view.paused = !view.paused; break;
             case UiAction::Restart:
-                world.reset(); view.paused = false; view.help = false; accumulator_ = 0;
+                world.reset(); ++restartSerial; view.paused = false; view.help = false; accumulator_ = 0;
                 aim = world.player.position+world.player.facing;
                 world.notify("A new descent. The same oath.",3.0f);
                 break;
@@ -77,7 +78,7 @@ public:
         const bool inScene = renderer.sceneContains(mouse,world,view);
         if (inScene) {
             aim = renderer.screenToWorld(mouse);
-            if (!world.player.attack.active && !world.player.walking && world.player.dashRemaining<=0)
+            if (!world.selectedEnemy() && !world.player.attack.active && !world.player.walking && world.player.dashRemaining<=0)
                 world.player.facing = normalized(aim-world.player.position,world.player.facing);
         }
         if (pressed(KEY_R)) action(UiAction::Restart);
@@ -93,7 +94,11 @@ public:
             const Vector2 point = leftQueued_ ? leftPosition_ : mouse;
             const UiAction clicked = renderer.hitTest(point,world,view);
             if (clicked != UiAction::None) action(clicked);
-            else if (renderer.sceneContains(point,world,view)) world.movePlayerTo(renderer.screenToWorld(point));
+            else if (renderer.sceneContains(point,world,view)) {
+                const std::uint32_t enemy = renderer.pickEnemy(point,world);
+                if (enemy!=0) world.selectEnemy(enemy);
+                else world.movePlayerTo(renderer.screenToWorld(point));
+            }
         }
         const bool running = !view.paused && !view.help && world.player.alive() && !world.cleared();
         if (running) {
@@ -116,8 +121,10 @@ public:
         // Keep layout/camera changes (inventory, help, zoom) in sync with the
         // state rendered this frame, rather than waiting another browser RAF.
         renderer.prepare(world,view,0);
-        SetMouseCursor(renderer.hitTest(mouse,world,view)!=UiAction::None ? MOUSE_CURSOR_POINTING_HAND :
-                       (inScene ? MOUSE_CURSOR_CROSSHAIR : MOUSE_CURSOR_DEFAULT));
+        const bool overScene = renderer.sceneContains(mouse,world,view);
+        SetMouseCursor(renderer.hitTest(mouse,world,view)!=UiAction::None ||
+                       (overScene && renderer.pickEnemy(mouse,world)!=0) ? MOUSE_CURSOR_POINTING_HAND :
+                       (overScene ? MOUSE_CURSOR_CROSSHAIR : MOUSE_CURSOR_DEFAULT));
         renderer.draw(world,view);
         queuedKeys_.fill(false);
         leftQueued_ = rightQueued_ = false;
@@ -170,12 +177,17 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
     const auto& player = world.player;
     const auto screen = app->renderer.worldToScreen(player.position);
     const auto camera = app->renderer.camera();
+    const auto hud = app->renderer.layout().targetHud;
+    const auto* selected = world.selectedEnemy();
     const int n = std::snprintf(json,sizeof(json),
         "{\"health\":%d,\"potions\":%d,\"armor\":%d,\"head\":%d,\"body\":%d,\"boots\":%d,"
         "\"x\":%.4f,\"y\":%.4f,\"moving\":%s,\"kills\":%d,\"enemies\":%d,\"attack\":%s,"
         "\"dashCooldown\":%.3f,\"paused\":%s,\"help\":%s,\"inventory\":%s,\"grid\":%s,"
         "\"screenX\":%.2f,\"screenY\":%.2f,\"cameraX\":%.2f,\"cameraY\":%.2f,"
-        "\"targetX\":%.2f,\"targetY\":%.2f,\"zoom\":%.4f,\"elapsed\":%.3f,\"targets\":[",
+        "\"targetX\":%.2f,\"targetY\":%.2f,\"zoom\":%.4f,\"elapsed\":%.3f,"
+        "\"restartSerial\":%u,\"selectedId\":%u,\"targetAction\":%d,\"selectedHealth\":%d,\"selectedMaxHealth\":%d,"
+        "\"attackSerial\":%u,\"attackInterval\":%.4f,\"attackSpeed\":%.3f,\"attackCooldown\":%.4f,"
+        "\"targetHud\":{\"x\":%.2f,\"y\":%.2f,\"width\":%.2f,\"height\":%.2f},\"targets\":[",
         player.health,player.potions,player.equipment.armor(),player.equipment.variant(ashfall::EquipmentSlot::Head),
         player.equipment.variant(ashfall::EquipmentSlot::Armor),player.equipment.variant(ashfall::EquipmentSlot::Boots),
         static_cast<double>(player.position.x),static_cast<double>(player.position.y),player.navigation.moving()?"true":"false",
@@ -184,7 +196,11 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
         app->view.showGrid?"true":"false",static_cast<double>(screen.x),static_cast<double>(screen.y),
         static_cast<double>(camera.offset.x),static_cast<double>(camera.offset.y),
         static_cast<double>(camera.target.x),static_cast<double>(camera.target.y),static_cast<double>(camera.zoom),
-        static_cast<double>(world.elapsed));
+        static_cast<double>(world.elapsed),app->restartSerial,world.selectedEnemyId(),static_cast<int>(world.targetAction()),
+        selected?selected->health:0,selected?selected->maxHealth:0,player.attack.serial,
+        static_cast<double>(player.attackInterval()),static_cast<double>(player.attackSpeed()),
+        static_cast<double>(player.attack.cooldown),static_cast<double>(hud.x),static_cast<double>(hud.y),
+        static_cast<double>(hud.width),static_cast<double>(hud.height));
     std::size_t written = static_cast<std::size_t>(std::max(0,n));
     for (std::size_t i = 0; i < world.enemies.size() && written+180<sizeof(json); ++i) {
         const auto& enemy = world.enemies[i];

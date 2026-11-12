@@ -20,6 +20,7 @@ enum class UiAction {
 struct Layout {
     Rectangle header{};
     Rectangle scene{};
+    Rectangle targetHud{};
     Rectangle sidebar{};
     Rectangle footer{};
     Rectangle inventoryButton{};
@@ -39,6 +40,8 @@ public:
     void draw(const World& world, const ViewState& view);
     UiAction hitTest(Vector2 mouse, const World& world, const ViewState& view) const;
     bool sceneContains(Vector2 mouse, const World& world, const ViewState& view) const;
+    // Front-most living sprite under the cursor (body or feet), never an entity pointer.
+    std::uint32_t pickEnemy(Vector2 point, const World& world) const;
     Vec2 screenToWorld(Vector2 point) const;
     Vector2 worldToScreen(Vec2 point) const;
     const Layout& layout() const { return layout_; }
@@ -63,9 +66,10 @@ private:
     void drawObstacle(const World& world, TileCoord tile);
     void drawPortal(const World& world);
     void drawHero(Vector2 feet, const Player& player, float scale, bool preview = false) const;
-    void drawEnemy(const Enemy& enemy) const;
+    void drawEnemy(const Enemy& enemy, bool selected, bool hovered) const;
     void drawSector(Vec2 center, Vec2 direction, float radius, float halfArc, Color fill, Color edge, float lift = 0) const;
     void drawHud(const World& world, const ViewState& view) const;
+    void drawTargetHud(const World& world) const;
     void drawSidebar(const World& world) const;
     void drawMinimap(const World& world, Rectangle bounds) const;
     void drawModal(const World& world, const ViewState& view) const;

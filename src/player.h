@@ -24,6 +24,8 @@ class Player {
 public:
     static constexpr float Radius = 0.22f;
     static constexpr int MaxHealth = 120;
+    static constexpr float BaseAttackInterval = 2.5f;
+    static constexpr float AutoAttackReach = 1.30f;
     Vec2 position{8.5f, 12.5f};
     Vec2 facing{1, -0.2f};
     Vec2 knockback{};
@@ -44,6 +46,8 @@ public:
     int level() const { return 1 + experience / 100; }
     int damage() const { return 26 + (level() - 1) * 3; }
     float moveSpeed() const { return 3.6f + equipment.speedBonus(); }
+    float attackSpeed() const { return std::clamp(1.0f + equipment.attackSpeedBonus(),0.5f,2.0f); }
+    float attackInterval() const { return BaseAttackInterval / attackSpeed(); }
     bool alive() const { return health > 0; }
     bool startAttack(Vec2 direction);
     bool dash(Vec2 direction);

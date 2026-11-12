@@ -3,12 +3,12 @@
 namespace ashfall {
 
 bool Player::startAttack(Vec2 direction) {
-    if (!alive() || attack.cooldown > 0 || dashRemaining > 0) return false;
+    if (!alive() || attack.active || attack.cooldown > 0 || dashRemaining > 0) return false;
     attack.combo = attack.comboWindow > 0 ? (attack.combo + 1) % 3 : 0;
-    attack.comboWindow = 1.2f;
+    attack.comboWindow = attackInterval() + 0.8f;
     attack.active = true;
     attack.elapsed = 0;
-    attack.cooldown = attack.combo == 2 ? 0.57f : 0.43f;
+    attack.cooldown = attackInterval();
     attack.duration = attack.combo == 2 ? 0.43f : 0.36f;
     ++attack.serial;
     attack.direction = normalized(direction, facing);

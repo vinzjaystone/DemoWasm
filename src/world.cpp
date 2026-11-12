@@ -48,18 +48,78 @@ bool World::movePlayerTo(Vec2 target) {
         notify(grid.walkable(destination) ? "No path through the ruins." : "The way is blocked.");
         return false;
     }
-    player.navigation.assign(path, player.position);
+    clearTarget();
+    player.attack.active = false; // A new ground command interrupts the windup, not the shared cooldown.
+    player.navigation.assign(path, player.position, grid, Player::Radius);
     click.valid = true;
     return true;
 }
+const Enemy* World::selectedEnemy() const {
+    const auto found = std::find_if(enemies.begin(),enemies.end(),[this](const Enemy& enemy) {
+        return enemy.id == selectedEnemyId_ && enemy.alive();
+    });
+    return found == enemies.end() ? nullptr : &*found;
+}
+bool World::selectEnemy(std::uint32_t id) {
+    if (!player.alive() || id == 0) return false;
+    const auto found = std::find_if(enemies.begin(),enemies.end(),[id](const Enemy& enemy) {
+        return enemy.id == id && enemy.alive();
+    });
+    if (found == enemies.end()) return false;
+    if (selectedEnemyId_ == id) return true; // Don't reset a route or swing on repeated clicks.
+    selectedEnemyId_ = id;
+    targetAction_ = TargetAction::Chasing;
+    targetRepath_ = 0;
+    targetGoal_ = {-1,-1};
+    updateTargetCombat(0);
+    return true;
+}
+void World::clearTarget() {
+    if (selectedEnemyId_ != 0) player.navigation.clear();
+    selectedEnemyId_ = 0;
+    targetAction_ = TargetAction::None;
+    targetRepath_ = 0;
+    targetGoal_ = {-1,-1};
+}
+void World::updateTargetCombat(float dt) {
+    if (selectedEnemyId_ == 0) return;
+    const Enemy* enemy = selectedEnemy();
+    if (!player.alive() || !enemy) { clearTarget(); return; }
+    if (player.dashRemaining > 0) return;
+    const Vec2 toEnemy = enemy->position-player.position;
+    if (length(toEnemy) <= Player::AutoAttackReach && grid.clearSegment(player.position,enemy->position,0.04f)) {
+        targetAction_ = TargetAction::Attacking;
+        player.navigation.clear();
+        player.facing = normalized(toEnemy,player.facing);
+        player.startAttack(toEnemy); // Uses the shared ASPD cooldown, not a per-click timer.
+        return;
+    }
+    if (targetAction_ != TargetAction::Unreachable) targetAction_ = TargetAction::Chasing;
+    targetRepath_ -= dt;
+    const TileCoord goal = tileAt(enemy->position);
+    if (targetRepath_ > 0 || (goal == targetGoal_ && player.navigation.moving())) return;
+    const PathResult path = pathfinder_.find(grid,tileAt(player.position),goal);
+    lastPathVisited = path.visited;
+    targetRepath_ = 0.25f;
+    targetGoal_ = goal;
+    if (path.succeeded()) {
+        targetAction_ = TargetAction::Chasing;
+        player.navigation.assign(path,player.position,grid,Player::Radius);
+    } else {
+        if (targetAction_ != TargetAction::Unreachable) notify("No path to that monster.");
+        targetAction_ = TargetAction::Unreachable;
+        player.navigation.clear();
+    }
+}
 bool World::attackAt(Vec2 target) {
     if (!finite(target)) return false;
+    clearTarget(); // A manual cleave overrides click-to-attack intent.
     return player.startAttack(target - player.position);
 }
 bool World::dashTo(Vec2 target) {
     if (!finite(target)) return false;
     const bool started = player.dash(target - player.position);
-    if (started) burst(player.position, EffectKind::Dust, 12, 0.6f);
+    if (started) { clearTarget(); burst(player.position, EffectKind::Dust, 12, 0.6f); }
     return started;
 }
 bool World::heal() {
@@ -90,6 +150,7 @@ void World::update(float dt) {
     noticeRemaining = std::max(0.0f, noticeRemaining - dt);
     updateEffects(dt);
     if (hitStop > 0) { hitStop = std::max(0.0f, hitStop - dt); return; }
+    updateTargetCombat(dt);
     player.update(grid, dt);
     resolvePlayerAttack();
     updateEnemies(dt);
@@ -103,7 +164,8 @@ void World::resolvePlayerAttack() {
     const Attack& attack = player.attack;
     for (Enemy& e : enemies) {
         if (!e.alive() || e.lastPlayerAttack == attack.serial) continue;
-        if (!sectorIntersectsBox(player.position, attack.direction, attack.range(), attack.halfArc(), e.bounds())) continue;
+        if (!sectorIntersectsBox(player.position, attack.direction, attack.range(), attack.halfArc(), e.bounds()) ||
+            !grid.clearSegment(player.position,e.position,0.04f)) continue;
         e.lastPlayerAttack = attack.serial;
         const int damage = attack.combo == 2 ? player.damage() * 3 / 2 : player.damage();
         e.health = std::max(0, e.health - damage);
@@ -128,6 +190,7 @@ void World::kill(Enemy& e) {
     player.embers += e.kind == EnemyKind::Warden ? 45 : 15;
     player.experience += e.kind == EnemyKind::Warden ? 50 : 20;
     burst(e.position, EffectKind::Ember, 22, 1.2f);
+    if (e.id == selectedEnemyId_) clearTarget();
     if (cleared()) notify("The sanctum is silent. Your oath endures.", 8.0f);
 }
 void World::updateEnemies(float dt) {
@@ -149,7 +212,7 @@ void World::updateEnemies(float dt) {
         }
         if (e.state == EnemyState::Chase) {
             e.facing = normalized(toPlayer, e.facing);
-            if (range < e.attackRange()) {
+            if (range < e.attackRange() && grid.clearSegment(e.position,player.position,0.04f)) {
                 e.state = EnemyState::Attack;
                 e.stateTime = 0;
                 e.attackDirection = e.facing;
@@ -162,7 +225,7 @@ void World::updateEnemies(float dt) {
                 e.repath -= dt;
                 if (e.repath <= 0) {
                     PathResult path = pathfinder_.find(grid, tileAt(e.position), tileAt(player.position));
-                    e.navigation.assign(path, e.position);
+                    e.navigation.assign(path, e.position, grid, e.radius());
                     e.repath = 0.42f + static_cast<float>(e.id % 4u) * 0.065f;
                 }
                 // A short hit stagger stops enemies walking straight through a swing.
@@ -174,18 +237,19 @@ void World::updateEnemies(float dt) {
             if (!e.attackApplied && e.stateTime >= e.windup()) {
                 e.attackApplied = true;
                 if (sectorIntersectsBox(e.position, e.attackDirection, e.attackRange() + 0.25f, 0.85f,
-                                        {player.position, {Player::Radius, Player::Radius}})) {
+                                        {player.position, {Player::Radius, Player::Radius}}) &&
+                    grid.clearSegment(e.position,player.position,0.04f)) {
                     const int actual = player.takeDamage(e.damage(), e.attackDirection * 4.0f);
                     if (actual > 0) {
                         screenShake = 0.55f;
                         screenFlash = 0.34f;
                         damageNumbers.push_back({player.position, actual, 0.85f, true, false});
                         burst(player.position, EffectKind::Hit, 12);
-                        if (!player.alive()) notify("Even a fading ember can be rekindled.", 10.0f);
+                        if (!player.alive()) { clearTarget(); notify("Even a fading ember can be rekindled.", 10.0f); }
                     }
                 }
             }
-            if (e.stateTime >= e.windup() + 0.55f) {
+            if (e.stateTime >= e.attackInterval()) {
                 e.state = EnemyState::Chase;
                 e.stateTime = 0;
                 e.repath = 0;

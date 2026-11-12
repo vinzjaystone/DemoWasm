@@ -15,6 +15,7 @@ struct EquipmentPiece {
     float speedBonus = 0;
     Rgb tint;
     int variant = 0;
+    float attackSpeedBonus = 0; // Additive multiplier bonus: +0.10 means +10% ASPD.
 };
 
 class Equipment {
@@ -24,6 +25,7 @@ public:
     void cycle(EquipmentSlot slot);
     int armor() const;
     float speedBonus() const;
+    float attackSpeedBonus() const;
     int variant(EquipmentSlot slot) const;
 private:
     std::array<std::size_t, 3> equipped_{{0, 1, 0}};

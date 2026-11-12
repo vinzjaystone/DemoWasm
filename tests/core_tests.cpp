@@ -184,17 +184,192 @@ void navigation() {
     Pathfinder finder;
     Navigation nav;
     Vec2 p{1.5f, 1.5f};
-    nav.assign(finder.find(grid, {1, 1}, {6, 6}), p);
+    nav.assign(finder.find(grid, {1, 1}, {6, 6}), p, grid, Player::Radius);
     p = nav.advance(grid, p, 20, 1, Player::Radius);
     CHECK(!nav.moving());
     CHECK(near(p.x, 6.5f));
     CHECK(near(p.y, 6.5f));
     p = {2.7f, 2.5f};
-    nav.assign(finder.find(grid, {2, 2}, {2, 6}), p);
+    nav.assign(finder.find(grid, {2, 2}, {2, 6}), p, grid, Player::Radius);
     CHECK(near(nav.waypoints.front().x, 2.5f));
+    CHECK(near(nav.waypoints.front().y, 3.5f)); // New route, not the current tile center.
+    const Vec2 rerouted = nav.advance(grid,p,3.0f,1.0f/120.0f,Player::Radius);
+    CHECK(rerouted.y>p.y && rerouted.x<p.x);
+    p=rerouted;
     for (int i = 0; i < 300; ++i) p = nav.advance(grid, p, 3.0f, 1.0f / 120.0f, Player::Radius);
     CHECK(!nav.moving());
     CHECK(near(p.y, 6.5f));
+}
+void smoothRetargeting() {
+    World world(Grid(20,8),{1.5f,2.5f},{});
+    CHECK(world.movePlayerTo({17.5f,2.5f}));
+    for (int frame = 0; frame < 120; ++frame) {
+        if (frame%3==0) CHECK(world.movePlayerTo({frame%2==0?17.5f:16.5f,2.5f}));
+        const Vec2 before = world.player.position;
+        world.update(1.0f/120.0f);
+        CHECK(world.player.position.x > before.x);
+        CHECK(near(world.player.position.y,2.5f));
+    }
+    CHECK(near(world.player.position.x,1.5f+world.player.moveSpeed(),0.03f));
+    CHECK(world.movePlayerTo({12.5f,5.5f}));
+    const Vec2 turn = world.player.position;
+    world.update(1.0f/120.0f);
+    CHECK(world.player.position.x > turn.x && world.player.position.y > turn.y);
+
+    Grid corner(8,8);
+    corner.set({3,1},TileKind::Column);
+    const Vec2 start{2.75f,2.08f}, end{3.5f,2.5f};
+    CHECK(corner.canOccupy(start,Player::Radius));
+    CHECK(corner.canOccupy(end,Player::Radius));
+    CHECK(!corner.clearSegment(start,end,Player::Radius)); // Mid-segment corner grazing.
+    CHECK(!corner.clearSegment(end,start,Player::Radius));
+    CHECK(!corner.clearSegment(start,end,-1));
+    CHECK(!corner.clearSegment({NAN,2.5f},end,Player::Radius));
+    CHECK(!corner.clearSegment({1.5f,1.5f},{5.5f,1.5f},0));
+    CHECK(corner.clearSegment({1.5f,4.5f},{5.5f,4.5f},Player::Radius));
+    Pathfinder finder;
+    Navigation nav;
+    nav.assign(finder.find(corner,tileAt(start),{6,2}),start,corner,Player::Radius);
+    CHECK(distance(nav.waypoints.front(),tileAt(start).center())<0.001f);
+    Vec2 p = start;
+    for (int i = 0; i < 240; ++i) {
+        p=nav.advance(corner,p,3.6f,1.0f/120.0f,Player::Radius);
+        CHECK(corner.canOccupy(p,Player::Radius));
+    }
+    CHECK(distance(p,TileCoord{6,2}.center())<0.03f);
+}
+void targetedCombat() {
+    World world(Grid(14,10),{1.5f,4.5f},{{{9.5f,4.5f}}});
+    const auto id = world.enemies.front().id;
+    CHECK(world.selectEnemy(id));
+    CHECK(world.selectedEnemyId()==id && world.selectedEnemy()!=nullptr);
+    CHECK(world.targetAction()==TargetAction::Chasing && world.player.navigation.moving());
+    CHECK(world.player.attack.serial==0); // Do not swing at a distant target.
+    for (int i = 0; i < 600 && world.player.attack.serial==0; ++i) world.update(1.0f/120.0f);
+    CHECK(world.player.attack.serial==1);
+    CHECK(distance(world.player.position,world.selectedEnemy()->position)<=Player::AutoAttackReach+0.05f);
+    CHECK(!world.player.navigation.moving());
+    const auto serial = world.player.attack.serial;
+    for (int i = 0; i < 120; ++i) {
+        CHECK(world.selectEnemy(id));
+        world.update(1.0f/120.0f);
+    }
+    CHECK(world.player.attack.serial==serial);
+    for (int i = 0; i < 240 && world.player.attack.serial==serial; ++i) world.update(1.0f/120.0f);
+    CHECK(world.player.attack.serial==serial+1);
+    CHECK(world.selectedEnemy()->health<world.selectedEnemy()->maxHealth);
+    CHECK(world.movePlayerTo({1.5f,1.5f}));
+    CHECK(!world.selectedEnemy() && world.selectedEnemyId()==0);
+    CHECK(!world.player.attack.active);
+    CHECK(world.player.navigation.moving());
+    CHECK(!world.selectEnemy(99999));
+    CHECK(world.selectEnemy(id));
+    CHECK(world.dashTo({1.5f,1.5f}));
+    CHECK(!world.selectedEnemy());
+
+    World unreachable(Grid(8,8),{1.5f,3.5f},{{{5.5f,3.5f}}});
+    for (int y=0;y<8;++y) unreachable.grid.set({3,y},TileKind::Column);
+    CHECK(unreachable.selectEnemy(unreachable.enemies.front().id));
+    tick(unreachable,1);
+    CHECK(unreachable.targetAction()==TargetAction::Unreachable);
+    CHECK(!unreachable.player.navigation.moving() && unreachable.player.attack.serial==0);
+    unreachable.grid.set({3,3},TileKind::Floor); // A path becoming available resumes the same selection.
+    tick(unreachable,0.3f);
+    CHECK(unreachable.targetAction()!=TargetAction::Unreachable);
+    CHECK(unreachable.selectedEnemy()!=nullptr);
+
+    World dead(Grid(8,8),{2.5f,2.5f},{{{3.4f,2.5f}}});
+    const auto deadId=dead.enemies.front().id;
+    dead.enemies.front().health=1;
+    CHECK(dead.selectEnemy(deadId));
+    tick(dead,0.3f);
+    CHECK(dead.kills==1 && !dead.selectedEnemy() && dead.selectedEnemyId()==0);
+    tick(dead,1);
+    CHECK(dead.enemies.empty() && !dead.selectEnemy(deadId));
+}
+void targetIdentityAndAttackSpeed() {
+    World world(Grid(12,12),{2.5f,2.5f},{{{3.4f,2.5f}},{{2.5f,3.4f}}});
+    const auto first=world.enemies[0].id, second=world.enemies[1].id;
+    CHECK(world.selectEnemy(first));
+    const float cooldown=world.player.attack.cooldown;
+    const auto serial=world.player.attack.serial;
+    CHECK(world.selectEnemy(second));
+    CHECK(world.selectedEnemyId()==second && world.player.attack.serial==serial);
+    CHECK(world.player.attack.cooldown==cooldown);
+    for (int i=0;i<50;++i) world.spawnEnemy({{9.5f,9.5f}}); // Force vector reallocation.
+    CHECK(world.selectedEnemy()->id==second);
+    world.enemies[0].state=EnemyState::Dead;
+    world.enemies[0].stateTime=1;
+    tick(world,0.1f);
+    CHECK(world.selectedEnemy()->id==second); // Erase a different vector element.
+    world.player.takeDamage(10000,{0,0});
+    tick(world,0.1f);
+    CHECK(world.selectedEnemyId()==0);
+    world.reset();
+    CHECK(!world.selectedEnemy());
+
+    Player player;
+    CHECK(near(player.attackInterval(),2.5f));
+    player.equipment.cycle(EquipmentSlot::Boots); // Greaves: slower ASPD.
+    CHECK(player.attackInterval()>2.5f);
+    player.equipment.cycle(EquipmentSlot::Boots); // Fleetstriders: faster ASPD.
+    CHECK(player.attackInterval()<2.5f);
+    CHECK(player.startAttack({1,0}));
+    CHECK(near(player.attack.cooldown,player.attackInterval()));
+    const auto oldCooldown=player.attack.cooldown;
+    player.equipment.cycle(EquipmentSlot::Armor);
+    CHECK(player.attack.cooldown==oldCooldown); // Gear cannot reset recovery mid-swing.
+}
+void targetRepathAndOcclusion() {
+    World moving(Grid(14,10),{1.5f,4.5f},{{{9.5f,4.5f}}});
+    const auto id=moving.enemies.front().id;
+    CHECK(moving.selectEnemy(id));
+    tick(moving,0.1f);
+    moving.enemies.front().position={9.5f,7.5f};
+    tick(moving,0.3f);
+    CHECK(moving.selectedEnemyId()==id);
+    CHECK(near(moving.player.navigation.waypoints.back().y,7.5f));
+    CHECK(moving.player.attack.serial==0);
+    for (int i=0;i<1200 && moving.player.attack.serial==0;++i) moving.update(1.0f/120.0f);
+    CHECK(moving.player.attack.serial==1); // Follow the moved monster without another click.
+
+    Grid corner(8,8);
+    corner.set({3,2},TileKind::Column);
+    World blocked(corner,{2.65f,2.4f},{{{3.35f,3.4f}}});
+    CHECK(distance(blocked.player.position,blocked.enemies.front().position)<Player::AutoAttackReach);
+    CHECK(blocked.selectEnemy(blocked.enemies.front().id));
+    CHECK(blocked.targetAction()==TargetAction::Chasing && blocked.player.attack.serial==0);
+    CHECK(blocked.attackAt(blocked.enemies.front().position));
+    CHECK(blocked.selectedEnemyId()==0);
+    // Hold the enemy in recovery to isolate line-of-sight from its navigation.
+    blocked.enemies.front().state=EnemyState::Attack;
+    blocked.enemies.front().attackApplied=true;
+    tick(blocked,0.3f);
+    CHECK(blocked.enemies.front().health==blocked.enemies.front().maxHealth);
+}
+void attackCadence() {
+    Grid grid(20,20);
+    float fastest=10, slowest=0;
+    for (int head=0;head<3;++head) for (int armor=0;armor<3;++armor) for (int boots=0;boots<3;++boots) {
+        Player player;
+        for (int i=0;i<head;++i) player.equipment.cycle(EquipmentSlot::Head);
+        for (int i=0;i<armor;++i) player.equipment.cycle(EquipmentSlot::Armor);
+        for (int i=0;i<boots;++i) player.equipment.cycle(EquipmentSlot::Boots);
+        const float interval=player.attackInterval();
+        CHECK(interval>=1.999f && interval<=3.0f);
+        fastest=std::min(fastest,interval);
+        slowest=std::max(slowest,interval);
+        CHECK(player.startAttack({1,0}));
+        int frames=0;
+        do {
+            player.update(grid,1.0f/120.0f);
+            ++frames;
+        } while (!player.startAttack({1,0}) && frames<400);
+        const float actual=static_cast<float>(frames)/120.0f;
+        CHECK(player.attack.serial==2 && player.attack.combo==1);
+        CHECK(actual>=interval-0.001f && actual<=interval+0.009f);
+    }
+    CHECK(near(fastest,2.0f) && near(slowest,2.5f/0.9f));
 }
 void wardrobe() {
     Equipment equipment;
@@ -230,8 +405,11 @@ void playerTimersAndArmor() {
     Player player;
     CHECK(player.startAttack({1, 0}));
     CHECK(!player.startAttack({1, 0}));
+    CHECK(near(player.attackInterval(),2.5f));
     for (int i = 0; i < 60; ++i) player.update(Grid(20, 20), 1.0f / 120.0f);
     CHECK(!player.attack.active);
+    CHECK(!player.startAttack({1,0})); // Finishing an animation does not reset ASPD recovery.
+    for (int i = 0; i < 252; ++i) player.update(Grid(20,20),1.0f/120.0f);
     CHECK(player.startAttack({1, 0}));
     CHECK(player.attack.combo == 1);
     const int damage = player.takeDamage(14, {0, 0});
@@ -254,13 +432,9 @@ void oncePerSwingAndDeath() {
     tick(world, 0.3f);
     CHECK(world.enemies.front().health == 65 - world.player.damage());
     CHECK(world.kills == 0);
-    // Finish with repeated aim-correct attacks; each swing can only hit once.
-    for (int i = 0; i < 500 && !world.cleared(); ++i) {
-        if (!world.enemies.empty()) world.attackAt(world.enemies.front().position);
-        world.update(1.0f / 120.0f);
-        if (!world.enemies.empty() && distance(world.player.position, world.enemies.front().position) > 1.4f)
-            world.movePlayerTo(world.enemies.front().position);
-    }
+    // A single selection finishes the encounter without holding an attack key.
+    CHECK(world.selectEnemy(world.enemies.front().id));
+    for (int i = 0; i < 1200 && !world.cleared(); ++i) world.update(1.0f/120.0f);
     CHECK(world.kills == 1);
     CHECK(world.cleared());
     CHECK(world.player.embers == 15);
@@ -300,23 +474,19 @@ void deathAndFullRun() {
     // Complete the authored arena using the public gameplay commands, not
     // teleports, modified health, or forced kills. This also exercises the Warden.
     World run;
-    float repath = 0;
     for (int frame = 0; frame < 36000 && run.player.alive() && !run.cleared(); ++frame) {
-        const Enemy* target = nullptr;
-        float closest = 1e9f;
-        for (const Enemy& enemy : run.enemies) {
-            const float d = distance(run.player.position,enemy.position);
-            if (enemy.alive() && d<closest) { closest=d; target=&enemy; }
+        if (!run.selectedEnemy()) {
+            const Enemy* target = nullptr;
+            float closest = 1e9f;
+            for (const Enemy& enemy : run.enemies) {
+                const float d = distance(run.player.position,enemy.position);
+                if (enemy.alive() && d<closest) { closest=d; target=&enemy; }
+            }
+            CHECK(target!=nullptr);
+            CHECK(run.selectEnemy(target->id));
         }
-        CHECK(target!=nullptr);
-        if (repath<=0 && closest>1.25f) {
-            run.movePlayerTo(target->position);
-            repath=0.35f;
-        }
-        run.attackAt(target->position);
         if (run.player.health<65 && run.player.potions>0) run.heal();
         run.update(1.0f/120.0f);
-        repath-=1.0f/120.0f;
     }
     CHECK(run.cleared());
     CHECK(run.kills==8 && run.livingEnemies()==0);
@@ -370,6 +540,11 @@ int main() {
         {"projection and negative picking", projection}, {"grid collision and tunneling", gridAndCollision},
         {"A* basic cases", pathBasics}, {"A* maze and no corner cutting", pathCornersAndMaze},
         {"A* optimality vs Dijkstra on 80 maps", optimalPaths},
+        {"continuous rerouting and swept corner clearance", smoothRetargeting},
+        {"click target chase, timed attacks, cancellation, and death", targetedCombat},
+        {"stable target IDs and equipment attack speed", targetIdentityAndAttackSpeed},
+        {"moving targets and wall-occluded melee", targetRepathAndOcclusion},
+        {"attack cadence across all 27 equipment combinations", attackCadence},
         {"smooth multi-waypoint movement", navigation}, {"paper-doll equipment", wardrobe},
         {"arc vs bounding-box geometry", attackGeometry}, {"player timers and mitigation", playerTimersAndArmor},
         {"one hit per swing and enemy removal", oncePerSwingAndDeath}, {"AI windup and dodging", enemyAiAndDodge},
