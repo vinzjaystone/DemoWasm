@@ -204,7 +204,15 @@ try {
   console.log('[PASS] Pause/help freeze live and preview poses; restart resets animation without reuploading');
 } catch (error) {
   console.error(error);
-  console.error('State:', await state().catch(() => null));
+  const snapshot = await state().catch(() => null);
+  console.error('State:', snapshot);
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    // Keep failures inspectable through the Checks API even if GitHub's
+    // downloadable logs/artifact storage is temporarily inaccessible.
+    const details = `${error.stack || error}\nSprites expected: ${expected}; shader failure: ${shaderFailure}\nState: ${JSON.stringify(snapshot)}`
+      .replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+    console.log(`::error title=Character browser smoke test::${details}`);
+  }
   await page.screenshot({ path: `${artifacts}/character-failure.png` }).catch(() => {});
   process.exitCode = 1;
 } finally {
