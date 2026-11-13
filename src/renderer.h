@@ -1,6 +1,7 @@
 #pragma once
 
 #include "world.h"
+#include "character_visual.h"
 #include "raylib.h"
 #include <vector>
 
@@ -36,6 +37,15 @@ struct Layout {
 
 class Renderer {
 public:
+    void initializePlayer(const Player& player);
+    void resetPlayerAnimation(const Player& player) { animator_.reset(player); }
+    void animatePlayer(const Player& player,float dt,bool running) { animator_.update(player,dt,running); }
+    character::Pose playerPose() const { return animator_.pose(); }
+    character::Pose previewPose() const { return animator_.preview(); }
+    bool spritesReady() const { return sprites_.ready(); }
+    int spriteUploads() const { return sprites_.uploads(); }
+    double walkDistance() const { return animator_.walkDistance(); }
+    double idleSeconds() const { return animator_.idleSeconds(); }
     void prepare(const World& world, const ViewState& view, float frameDt);
     void draw(const World& world, const ViewState& view);
     UiAction hitTest(Vector2 mouse, const World& world, const ViewState& view) const;
@@ -59,6 +69,8 @@ private:
     Camera2D camera_{};
     Layout layout_;
     std::vector<DrawItem> drawList_;
+    character::Animator animator_;
+    character::Sprites sprites_;
     float time_ = 0;
 
     void drawDungeon(const World& world, const ViewState& view);

@@ -22,6 +22,7 @@ public:
 
     Application() {
         view.inventory = GetScreenWidth() >= 960;
+        renderer.initializePlayer(world.player);
         renderer.prepare(world,view,0);
         world.notify("Your oath begins here.",3.0f);
     }
@@ -33,6 +34,7 @@ public:
             case UiAction::Restart:
                 world.reset(); ++restartSerial; view.paused = false; view.help = false; accumulator_ = 0;
                 aim = world.player.position+world.player.facing;
+                renderer.resetPlayerAnimation(world.player);
                 world.notify("A new descent. The same oath.",3.0f);
                 break;
             case UiAction::Fullscreen:
@@ -120,8 +122,16 @@ public:
         constexpr float step = 1.0f/120.0f;
         if (!view.paused && !view.help) {
             accumulator_ = std::min(0.1f,accumulator_+dt);
-            while (accumulator_ >= step) { world.update(step); accumulator_ -= step; }
+            while (accumulator_ >= step) {
+                const bool animating=world.player.alive() && !world.cleared() && world.hitStop<=0;
+                world.update(step);
+                renderer.animatePlayer(world.player,animating?step:0,true);
+                accumulator_ -= step;
+            }
         } else accumulator_ = 0; // Never catch up time spent paused or in another tab.
+        // Synchronize input-only facing/attack changes even on a frame with no
+        // simulation step. Presentation never writes back to the simulation.
+        renderer.animatePlayer(world.player,0,!view.paused && !view.help);
         // Keep layout/camera changes (inventory, help, zoom) in sync with the
         // state rendered this frame, rather than waiting another browser RAF.
         renderer.prepare(world,view,0);
@@ -183,6 +193,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
     const auto camera = app->renderer.camera();
     const auto hud = app->renderer.layout().targetHud;
     const auto* selected = world.selectedEnemy();
+    const auto pose = app->renderer.playerPose();
     const int n = std::snprintf(json,sizeof(json),
         "{\"health\":%d,\"potions\":%d,\"armor\":%d,\"head\":%d,\"body\":%d,\"boots\":%d,"
         "\"x\":%.4f,\"y\":%.4f,\"moving\":%s,\"pathSize\":%zu,\"pathNext\":%zu,\"pathVisited\":%zu,"
@@ -192,6 +203,9 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
         "\"targetX\":%.2f,\"targetY\":%.2f,\"zoom\":%.4f,\"elapsed\":%.3f,"
         "\"restartSerial\":%u,\"groundSerial\":%u,\"selectedId\":%u,\"targetAction\":%d,\"selectedHealth\":%d,\"selectedMaxHealth\":%d,"
         "\"attackSerial\":%u,\"attackInterval\":%.4f,\"attackSpeed\":%.3f,\"attackCooldown\":%.4f,"
+        "\"attackElapsed\":%.4f,\"attackDuration\":%.4f,\"walking\":%s,\"dashRemaining\":%.4f,"
+        "\"spriteReady\":%s,\"spriteUploads\":%d,\"spriteClip\":\"%s\",\"spriteDirection\":\"%s\",\"spriteFrame\":%d,"
+        "\"spriteWeaponBehind\":%s,\"spriteWalkDistance\":%.6f,\"spriteIdleSeconds\":%.6f,\"previewFrame\":%d,"
         "\"targetHud\":{\"x\":%.2f,\"y\":%.2f,\"width\":%.2f,\"height\":%.2f},\"targets\":[",
         player.health,player.potions,player.equipment.armor(),player.equipment.variant(ashfall::EquipmentSlot::Head),
         player.equipment.variant(ashfall::EquipmentSlot::Armor),player.equipment.variant(ashfall::EquipmentSlot::Boots),
@@ -205,7 +219,12 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
         static_cast<double>(world.elapsed),app->restartSerial,app->groundSerial,world.selectedEnemyId(),static_cast<int>(world.targetAction()),
         selected?selected->health:0,selected?selected->maxHealth:0,player.attack.serial,
         static_cast<double>(player.attackInterval()),static_cast<double>(player.attackSpeed()),
-        static_cast<double>(player.attack.cooldown),static_cast<double>(hud.x),static_cast<double>(hud.y),
+        static_cast<double>(player.attack.cooldown),static_cast<double>(player.attack.elapsed),static_cast<double>(player.attack.duration),
+        player.walking?"true":"false",static_cast<double>(player.dashRemaining),
+        app->renderer.spritesReady()?"true":"false",app->renderer.spriteUploads(),
+        ashfall::character::clipInfo(pose.clip).name,ashfall::character::directionName(pose.direction),pose.frame,
+        ashfall::character::weaponBehind(pose)?"true":"false",app->renderer.walkDistance(),app->renderer.idleSeconds(),
+        app->renderer.previewPose().frame,static_cast<double>(hud.x),static_cast<double>(hud.y),
         static_cast<double>(hud.width),static_cast<double>(hud.height));
     std::size_t written = static_cast<std::size_t>(std::max(0,n));
     for (std::size_t i = 0; i < world.enemies.size() && written+180<sizeof(json); ++i) {

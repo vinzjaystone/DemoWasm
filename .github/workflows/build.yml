@@ -39,7 +39,8 @@ jobs:
       - name: Compile application sources against the actual Raylib headers
         run: >-
           c++ -std=c++17 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror
-          -Isrc -Ibuild/raylib-api/src -fsyntax-only src/main.cpp src/renderer.cpp src/sprite_editor.cpp src/sprite_document.cpp
+          -Isrc -Ibuild/raylib-api/src -DASHFALL_PLAYER_SPRITES=1
+          -fsyntax-only src/main.cpp src/renderer.cpp src/character_visual.cpp src/character_animation.cpp src/character_sprites.cpp src/sprite_editor.cpp src/sprite_document.cpp
 
   desktop:
     name: Native desktop build
@@ -77,7 +78,17 @@ jobs:
           SERVER_PID=$!
           trap 'kill "$SERVER_PID"' EXIT
           node tests/browser_smoke.mjs
+          node tests/character_sprite_smoke.mjs
+          SPRITE_SHADER_FAILURE=1 node tests/character_sprite_smoke.mjs
           node tests/sprite_editor_smoke.mjs
+      - name: Exercise the procedural player fallback
+        run: |
+          emcmake cmake -S . -B build/web -DASHFALL_PLAYER_SPRITES=OFF
+          cmake --build build/web --parallel 4
+          python3 tools/serve.py --directory build/web --port 8080 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID"' EXIT
+          SPRITES_EXPECTED=0 node tests/character_sprite_smoke.mjs
       - name: Save screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -87,7 +98,7 @@ jobs:
           if-no-files-found: ignore
       - name: Build release without diagnostics
         run: |
-          emcmake cmake -S . -B build/web -DASHFALL_WEB_TEST_API=OFF
+          emcmake cmake -S . -B build/web -DASHFALL_WEB_TEST_API=OFF -DASHFALL_PLAYER_SPRITES=ON
           cmake --build build/web --parallel 4
       - name: Verify production startup and PNG export without diagnostics
         run: |
