@@ -1,10 +1,10 @@
 # Ashfall — The Ashen Sanctum
 
-An asset-free isometric hack-and-slash MVP in **C++17 + Raylib 5.5**, built for **desktop and WebAssembly**. Enter a ruined sanctuary, cut down seven hollow and their Ash Warden, and keep your flame alive.
+A self-contained isometric hack-and-slash MVP in **C++17 + Raylib 5.5**, built for **desktop and WebAssembly**. Enter a ruined sanctuary, cut down seven hollow and their Ash Warden, and keep your flame alive.
 
 The repository also includes **Sprite Workshop**, a standalone pixel-art editor built with the same C++17/Raylib stack. Open it from the game’s **SPRITE EDITOR** link, or build the native tool with `make editor`.
 
-All game art is procedural: stone tiles, pillars, rubble, braziers, the portal, characters, equipment, attack trails, particles, and interface. The only font is Raylib's embedded default font. **No images, spritesheets, font downloads, asset packs, JavaScript game engine, or runtime network requests are required.**
+All game art is procedural: stone tiles, pillars, rubble, braziers, the portal, characters, equipment, attack trails, particles, and interface. The player uses **generated eight-direction spritesheets** with layered equipment; the original shape renderer remains a fallback. The only font is Raylib's embedded default font. **No external artwork, font downloads, asset packs, JavaScript game engine, or runtime art requests are required.**
 
 ## Play
 
@@ -40,6 +40,12 @@ A valid ground command (including a stop in the occupied tile), a dash, or a man
 
 Each slot has three pieces with a distinct tint/silhouette and actual gameplay stats. Total armor reduces each incoming hit by `floor(armor × 0.65)`, with a minimum of one damage. Movement speed is `3.6 + sum(equipment speed bonuses)` tiles/second. Iron sallets/greaves each give −5% ASPD; cinder crowns and ranger leathers +5%; crimson mantles and fleetstriders +10%. The player starts with 120 vitality; kills grant embers and experience, and each 100 XP increases level and damage.
 
+### Animated player
+
+The player has **eight projected facing directions**, a **4-frame idle**, **8-frame walk**, and **6-frame attack**. Layers share a **96 × 96 logical cell** and fixed foot pivot; walking follows actual distance traveled, and attacks follow the existing swing/damage timeline—not the ASPD cooldown. Head/armor/boots retain all 27 live combinations, and the weapon moves behind or in front as the character turns. Pause/help freeze both the live sprite and paper doll.
+
+Original starter sheets are generated once from bundled C++ code, uploaded with nearest filtering, and reused on restart. No PNG loading or web filesystem is needed. The previous procedural hero remains available if initialization fails or `ASHFALL_PLAYER_SPRITES=OFF` is selected. See [Player sprite format, timing, ownership, and fallback](docs/player-sprites.md) for the layout and verification details.
+
 ## Sprite Workshop
 
 A separate tool alongside the game, not a replacement renderer. It starts with a procedural 32 × 32 character you can edit, or a new transparent **16, 32, 64, or 128 px** square canvas.
@@ -67,7 +73,7 @@ A separate tool alongside the game, not a replacement renderer. It starts with a
 
 **Desktop:** drop a PNG onto the window to import; the Open button explains this workflow without adding a platform-specific file-dialog dependency. Export writes `build/sprites/<name>.png` relative to the working directory. The back arrow or window close asks before discarding unexported work. Run the executable from the repository root for the documented export location.
 
-The editor does **not** automatically replace the game’s procedural character art. Animation timelines, layers, spritesheet packing, and game asset integration are outside this first tool.
+The editor does **not** automatically replace the game’s generated player sheets. Animation timelines, editable layers, sheet import/packing/export, and direct integration remain follow-up work for the tool.
 
 ## Build requirements
 
@@ -136,7 +142,7 @@ python3 tools/serve.py --directory build/web --port 8080
 
 Serve **all six files together** from `build/web`: `index.html`, `index.js`, `index.wasm`, `editor.html`, `editor.js`, and `editor.wasm`. The relative links between apps also work when hosted in a subdirectory. Do not open the HTML with `file://`. The included server binds to `0.0.0.0`, sends the correct WASM MIME type, and allows iframe previews and arbitrary preview hosts. Static hosting is sufficient; there is no backend. The browser needs WebGL and WebAssembly, not cross-origin isolation or SharedArrayBuffer.
 
-Release output is approximately **360 KiB for the game** and **430 KiB for the editor**, uncompressed (toolchain dependent). Each app starts with 32 MiB of WASM linear memory and allows growth; navigating between them unloads the other app. Threads, Asyncify, asset preloading, and Emscripten's filesystem are not used. Audio is intentionally not part of this MVP.
+Release output is approximately **400 KiB for the game** and **430 KiB for the editor**, uncompressed (toolchain dependent). Each app starts with 32 MiB of WASM linear memory and allows growth; navigating between them unloads the other app. Threads, Asyncify, asset preloading, and Emscripten's filesystem are not used. Audio is intentionally not part of this MVP.
 
 ### Existing/offline Raylib
 
@@ -171,7 +177,9 @@ ctest --test-dir build/tests --output-on-failure
 
 Coverage includes both gradient API call shapes (without a graphics dependency), projection round trips/negative picking, collision and dash tunneling, A* invalid/unreachable/same-tile cases, optimal routing, no diagonal corner cutting, waypoint overshoot, continuous repeated rerouting with swept-corner clearance, same-destination spam vs. single-click trajectory equivalence, occupied-tile stopping, blocked/displaced route invalidation, equipment cycling/stats/attack speed, single-click target pursuit, cooldown preservation and stable-ID target cleanup, exact attack-sector intersection, cooldowns/invulnerability, one hit per swing, AI pursuit/telegraphs/dodging, death/removal, a complete eight-enemy playthrough, full-level connectivity, and a 100-second simulation stress run with collision and memory-budget invariants.
 
-Sprite tests additionally cover RGBA/hex handling and bounds, connected lines, stroke transactions, saved revisions, undo/redo branching, mirrored paint, bounded fill, transparency, rectangular transforms, the 64-entry history limit, PNG header/dimension preflight, and the procedural starter. `ASHFALL_BUILD_GAME=OFF` disables **both** graphics applications, keeping these tests free of Raylib.
+Character tests additionally verify projected facing/hysteresis, idle/walk/attack timing, distance-driven gait, pause/reset, every generated sheet cell and its padding/registration, all 27 equipment combinations, distinct directional bodies, and simulation equivalence with/without animation.
+
+Sprite editor tests additionally cover RGBA/hex handling and bounds, connected lines, stroke transactions, saved revisions, undo/redo branching, mirrored paint, bounded fill, transparency, rectangular transforms, the 64-entry history limit, PNG header/dimension preflight, and the procedural starter. `ASHFALL_BUILD_GAME=OFF` disables **both** graphics applications, keeping all three core suites free of Raylib.
 
 ### Real browser smoke tests (optional)
 
@@ -187,6 +195,7 @@ npx playwright install chromium
 make serve
 # In another:
 node tests/browser_smoke.mjs
+node tests/character_sprite_smoke.mjs
 node tests/sprite_editor_smoke.mjs
 ```
 
@@ -194,7 +203,9 @@ This drives real mouse/keyboard inputs, checks gear/ASPD stats, blocked-tile pic
 
 The editor test uses real input and the actual C++/WASM app to verify gapless strokes, erasing, picker, mirror, line/rectangle/fill, custom RGBA/name input, PNG downloads and pixel/alpha round-trips, the file picker and drag/drop, destructive-operation guards, rectangular rotation, invalid PNG rejection, responsive layout, anchored zoom, and panning.
 
-CI builds both native apps, compiles both against actual Raylib 5.5/6.0 headers, runs both core suites with/without sanitizers and both browser suites, then rebuilds without diagnostics and runs `node tests/release_smoke.mjs` to verify production startup, PNG export and inter-app navigation. The `ashfall-web` artifact contains both complete apps.
+The character browser test also observes actual WebGL uploads and nearest/clamp filtering, checks directional body/weapon poses, gear reuse, distance-driven walking, normal/third-combo swing timing, and frozen animation during pause/help. CI verifies shader-failure cleanup with `SPRITE_SHADER_FAILURE=1`, then runs it again with `ASHFALL_PLAYER_SPRITES=OFF` (`SPRITES_EXPECTED=0`) to exercise the explicit procedural fallback.
+
+CI builds both native apps, compiles against actual Raylib 5.5/6.0 headers, runs all three core suites with/without sanitizers and all three browser suites, then rebuilds without diagnostics and runs `node tests/release_smoke.mjs` to verify production startup, PNG export and inter-app navigation. The `ashfall-web` artifact contains both complete apps.
 
 `ASHFALL_WEB_TEST_API` is **off by default**. It adds only a read-only state snapshot for tests; no teleport, invulnerability, damage, or other test-only mutation is exposed. Turn it off for a normal release. `make web` explicitly disables it, including after a diagnostic test build.
 
@@ -209,7 +220,10 @@ src/
   player.h / .cpp          Navigation, ASPD/combo timers, dash, health, mitigation
   combat.h / .cpp          Enemy state + exact sector/AABB collision geometry
   world.h / .cpp           Target selection/chase/auto-combat, AI, damage/death, effects
-  renderer.h / .cpp        Procedural art, stable Y-sort, HUD, paper doll, UI hit testing
+  character_animation.*    Read-only directional/clip sampling and distance-based visual clock
+  character_sprites.*      Graphics-independent starter sheet generation and packing metadata
+  character_visual.*       RAII atlas/shader ownership, tinted equipment layers, anchored quads
+  renderer.h / .cpp        World art, stable Y-sort, player sprite/fallback, HUD, paper doll, UI
   raylib_compat.h          Compile-time drawing API compatibility (Raylib 5.5/6.0)
   main.cpp                 Raylib input, fixed-step driver, native/web lifecycle
   sprite_document.h / .cpp Graphics-independent RGBA document, tools, history, PNG preflight
@@ -217,8 +231,10 @@ src/
 web/shell.html             Game loading/fullscreen shell + relative editor link
 web/editor.html            Editor canvas/loading shell + local PNG file input
 tests/core_tests.cpp        Native game tests, no third-party test framework
+tests/character_tests.cpp   Native animation/art/registration/equipment tests, no graphics dependency
 tests/sprite_tests.cpp      Native editor-document tests, no graphics dependency
 tests/browser_smoke.mjs     Actual-browser game integration checks
+tests/character_sprite_smoke.mjs Player animation, observed GPU uploads and fallback checks
 tests/sprite_editor_smoke.mjs Actual-browser editor/PNG integration checks
 tests/release_smoke.mjs     Production startup/export/navigation without diagnostics
 tests/png_helpers.mjs       Small PNG fixtures/reader used only by browser tests
@@ -232,7 +248,7 @@ tools/serve.py             Preview-safe static server; optional --page editor.ht
   `screenX = originX + (x-y) × 32`, `screenY = originY + (x+y) × 16`.
 - Input first uses Raylib `GetScreenToWorld2D` to undo the camera, then the inverse projection. Tile selection uses **floor**, including negative coordinates.
 - Floor/light/telegraphs render first. Obstacles, portal, enemies, and the player share **one stable draw list sorted by projected foot Y**, rather than raw grid Y. Floating effects render afterwards.
-- The paper doll draws **Base Body → Boots → Armor → Head**, followed by the weapon. The same function draws the live character preview.
+- The player and paper doll share synchronized **Body → Boots → Armor → Head** sprite layers, with a rear/front weapon pass chosen by projected facing/swing. Fixed logical foot pivots preserve continuous position and foot-Y sorting; trimmed atlas cells only remove shared empty margins.
 
 ### Navigation, combat, and lifetime
 
@@ -243,11 +259,11 @@ tools/serve.py             Preview-safe static server; optional --page editor.ht
 - Player hitboxes are circular sectors vs enemy world-space AABBs; melee also requires an unobstructed line to the enemy. Intersection checks corners, radial boundary segments, and circle/box-edge crossings; targets on the arc boundary are not missed. An attack serial prevents multiple hits on the same enemy in one swing.
 - Hit feedback includes damage numbers, tint flashes, knockback, impact pause, screen shake, and a red screen flash when the player is hurt. Dying enemies fade and are erased; effects have bounded counts and lifetimes.
 - The simulation runs at **120 Hz** with a capped accumulator. Paused time is discarded. Web press edges are buffered in addition to Raylib's held states, so a fast tap between two animation frames is still registered. Browser tab hiding pauses the game.
-- All ownership uses values and standard RAII containers. There are no owning raw pointers, per-frame sprite allocations, loaded asset resources, blocking gameplay calls, or game-created threads. Desktop teardown releases the application and Raylib context; the browser loop uses `emscripten_set_main_loop`.
+- Ownership uses values and RAII. Five generated character textures and one hit-flash shader are loaded once; temporary CPU sheets are freed after upload. Failed initialization releases partial resources and uses the procedural fallback. There are no per-frame sprite allocations, runtime asset downloads, blocking gameplay calls, or game-created threads. Desktop teardown releases GPU resources before the Raylib context; the browser loop uses `emscripten_set_main_loop`.
 
 ## Scope
 
-This is a deliberately small, complete single-arena MVP, not a content-heavy ARPG engine. Level layout and encounters are authored/procedural, loot is represented by immediate embers/XP, and customization cycles the built-in equipment catalog. Persistence, audio, multiplayer, inventory storage, animation spritesheets, and multiple levels are intentionally left out.
+This is a deliberately small, complete single-arena MVP, not a content-heavy ARPG engine. Level layout and encounters are authored/procedural, loot is represented by immediate embers/XP, and customization cycles the built-in equipment catalog. Persistence, audio, multiplayer, inventory storage, animation authoring/import tools, additional hurt/death clips, and multiple levels are intentionally left out.
 
 ## License
 

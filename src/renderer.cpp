@@ -137,6 +137,13 @@ void keycap(const char* value, float x, float y, float width) {
 }
 }
 
+void Renderer::initializePlayer(const Player& player) {
+    animator_.reset(player);
+#if ASHFALL_PLAYER_SPRITES
+    sprites_.load();
+#endif
+}
+
 void Renderer::prepare(const World& world, const ViewState& view, float frameDt) {
     time_ += frameDt;
     const float w = static_cast<float>(GetScreenWidth()), h = static_cast<float>(GetScreenHeight());
@@ -521,7 +528,7 @@ void Renderer::drawPortal(const World& world) {
 }
 void Renderer::drawHero(Vector2 feet, const Player& player, float scale, bool preview) const {
     const float gait = !preview && player.walking ? std::sin(player.animation)*2.5f : 0;
-    const float breath = std::sin((preview?time_:player.animation)*2.0f)*0.6f;
+    const float breath = std::sin(static_cast<float>(animator_.idleSeconds())*2.0f)*0.6f;
     auto p = [feet,scale](float x,float y) { return Vector2{feet.x+x*scale,feet.y+y*scale}; };
     auto shape = [&p](std::initializer_list<Vec2> points,Color color) {
         std::array<Vector2,16> result{};
@@ -550,9 +557,12 @@ void Renderer::drawHero(Vector2 feet, const Player& player, float scale, bool pr
         const Vec2 d = normalized(iso_.worldToScreen(player.facing)-iso_.origin);
         for (int i = 3; i > 0; --i) {
             const Vector2 ghost{feet.x-d.x*static_cast<float>(i)*14,feet.y-d.y*static_cast<float>(i)*14};
-            diamond({ghost.x,ghost.y-21*scale},12*scale,22*scale,alpha(Teal,0.06f*static_cast<float>(4-i)));
+            if (!sprites_.draw(ghost,animator_.pose(),player.equipment,scale,false,alpha(Teal,0.12f*static_cast<float>(4-i))))
+                diamond({ghost.x,ghost.y-21*scale},12*scale,22*scale,alpha(Teal,0.06f*static_cast<float>(4-i)));
         }
     }
+    if (sprites_.draw(feet,preview?animator_.preview():animator_.pose(),player.equipment,scale,flash)) return;
+    // Procedural fallback: retained for disabled sprites or a failed GPU upload.
     // Base body / cloak. All visible equipment is layered in slot order below.
     shape({{-10,-34},{10,-34},{14,-4},{3,-9},{-9,-2},{-14,-6}},shade(armor,armorVariant==2?0.65f:0.42f));
     line(p(-5,-22),p(-6,-6),5*scale,Color{80,72,59,255});

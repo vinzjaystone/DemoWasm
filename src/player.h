@@ -7,6 +7,8 @@
 namespace ashfall {
 
 struct Attack {
+    static constexpr float HitStart = 0.075f;
+    static constexpr float HitEnd = 0.24f;
     bool active = false;
     float elapsed = 0;
     float duration = 0.36f;
@@ -15,7 +17,7 @@ struct Attack {
     std::uint32_t serial = 0;
     int combo = 0;
     Vec2 direction{1, 0};
-    bool damaging() const { return active && elapsed >= 0.075f && elapsed <= 0.24f; }
+    bool damaging() const { return active && elapsed >= HitStart && elapsed <= HitEnd; }
     float range() const { return combo == 2 ? 1.85f : 1.65f; }
     float halfArc() const { return combo == 2 ? 1.30f : 1.0f; }
 };
