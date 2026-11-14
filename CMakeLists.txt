@@ -22,6 +22,8 @@ add_library(ashfall_core
     src/grid.cpp
     src/pathfinding.cpp
     src/equipment.cpp
+    src/loot.cpp
+    src/world_loot.cpp
     src/player.cpp
     src/combat.cpp
     src/world.cpp
@@ -70,7 +72,7 @@ if(ASHFALL_BUILD_GAME)
         )
         FetchContent_MakeAvailable(raylib)
     endif()
-    add_executable(ashfall src/main.cpp src/renderer.cpp src/character_visual.cpp)
+    add_executable(ashfall src/main.cpp src/renderer.cpp src/inventory_ui.cpp src/character_visual.cpp)
     target_link_libraries(ashfall PRIVATE ashfall_save raylib)
     target_compile_definitions(ashfall PRIVATE ASHFALL_PLAYER_SPRITES=$<BOOL:${ASHFALL_PLAYER_SPRITES}>)
     add_executable(ashfall_sprite_editor src/sprite_editor.cpp src/character_visual.cpp)
@@ -127,4 +129,8 @@ if(ASHFALL_BUILD_TESTS AND NOT EMSCRIPTEN)
     add_executable(ashfall_save_tests tests/persistence_tests.cpp)
     target_link_libraries(ashfall_save_tests PRIVATE ashfall_save)
     add_test(NAME ashfall_persistence COMMAND ashfall_save_tests)
+    add_executable(ashfall_loot_tests tests/loot_tests.cpp)
+    target_link_libraries(ashfall_loot_tests PRIVATE ashfall_save)
+    target_compile_definitions(ashfall_loot_tests PRIVATE ASHFALL_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME ashfall_loot COMMAND ashfall_loot_tests)
 endif()

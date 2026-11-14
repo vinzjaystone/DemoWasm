@@ -17,12 +17,14 @@ World::World(Grid level, Vec2 playerSpawn, const std::vector<EnemySpawn>& spawns
     : grid(std::move(level)) {
     player.position = playerSpawn;
     enemies.reserve(24);
+    groundLoot.reserve(MaxGroundLoot);
     particles.reserve(256);
     damageNumbers.reserve(32);
     for (const EnemySpawn& spawn : spawns) spawnEnemy(spawn);
 }
 void World::reset() { *this = World{}; }
 void World::spawnEnemy(EnemySpawn spawn) {
+    if (totalEnemies>=64) return; // Simulation, drop and persistence bounds agree.
     const float radius = spawn.kind == EnemyKind::Warden ? 0.32f : Enemy::Radius;
     if (!grid.canOccupy(spawn.position, radius)) return;
     Enemy e;
@@ -46,13 +48,14 @@ bool World::movePlayerTo(Vec2 target) {
     // Ground destinations are tiles, not individual mouse positions. Repeating
     // the active command must not rewind its waypoint cursor or change a turn
     // halfway through a tile. A chase-to-ground switch must still cancel combat.
-    if (selectedEnemyId_ != 0 || !player.navigation.canContinueTo(destination,player.position,grid,Player::Radius)) {
+    if (selectedEnemyId_ != 0 || selectedLootId_ != 0 || !player.navigation.canContinueTo(destination,player.position,grid,Player::Radius)) {
         const PathResult path = pathfinder_.find(grid, tileAt(player.position), destination);
         lastPathVisited = path.visited;
         if (!path.succeeded()) {
             notify(grid.walkable(destination) ? "No path through the ruins." : "The way is blocked.");
             return false;
         }
+        clearLootTarget();
         clearTarget();
         // A new command for the occupied tile means stop here, not walk back
         // to its center. Duplicate active goals above still finish their final leg.
@@ -75,6 +78,7 @@ bool World::selectEnemy(std::uint32_t id) {
         return enemy.id == id && enemy.alive();
     });
     if (found == enemies.end()) return false;
+    clearLootTarget();
     if (selectedEnemyId_ == id) return true; // Don't reset a route or swing on repeated clicks.
     selectedEnemyId_ = id;
     targetAction_ = TargetAction::Chasing;
@@ -122,13 +126,14 @@ void World::updateTargetCombat(float dt) {
 }
 bool World::attackAt(Vec2 target) {
     if (!finite(target)) return false;
+    clearLootTarget();
     clearTarget(); // A manual cleave overrides click-to-attack intent.
     return player.startAttack(target - player.position);
 }
 bool World::dashTo(Vec2 target) {
     if (!finite(target)) return false;
     const bool started = player.dash(target - player.position);
-    if (started) { clearTarget(); burst(player.position, EffectKind::Dust, 12, 0.6f); }
+    if (started) { clearLootTarget(); clearTarget(); burst(player.position, EffectKind::Dust, 12, 0.6f); }
     return started;
 }
 bool World::heal() {
@@ -141,10 +146,6 @@ bool World::heal() {
     burst(player.position, EffectKind::Heal, 18);
     notify("A little light returns.");
     return true;
-}
-void World::cycleEquipment(EquipmentSlot slot) {
-    player.equipment.cycle(slot);
-    notify(std::string(player.equipment.get(slot).name) + " equipped.");
 }
 int World::livingEnemies() const {
     return static_cast<int>(std::count_if(enemies.begin(), enemies.end(), [](const Enemy& e) { return e.alive(); }));
@@ -164,6 +165,7 @@ void World::update(float dt) {
     resolvePlayerAttack();
     updateEnemies(dt);
     separateEnemies(dt);
+    updateLootTarget();
     enemies.erase(std::remove_if(enemies.begin(), enemies.end(), [](const Enemy& e) {
         return e.state == EnemyState::Dead && e.stateTime >= 0.65f;
     }), enemies.end());
@@ -196,8 +198,8 @@ void World::kill(Enemy& e) {
     e.stateTime = 0;
     e.navigation.clear();
     ++kills;
-    player.embers += e.kind == EnemyKind::Warden ? 45 : 15;
-    player.experience += e.kind == EnemyKind::Warden ? 50 : 20;
+    player.experience = std::min(MaxEmbers,player.experience+(e.kind == EnemyKind::Warden ? 50 : 20));
+    dropEnemyLoot(e);
     burst(e.position, EffectKind::Ember, 22, 1.2f);
     if (e.id == selectedEnemyId_) clearTarget();
     if (cleared()) notify("The sanctum is silent. Your oath endures.", 8.0f);

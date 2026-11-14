@@ -16,7 +16,7 @@ Rows, in order: **S, SW, W, NW, N, NE, E, SE**. Columns concatenate the clips; t
 
 ### Synchronized layers and GPU packing
 
-Five sheets are resident on the GPU: **body, boots, armor, head, weapon**. Equipment sheets contain three variants, with row index `variant × 8 + direction`. Equipment layers use neutral shading multiplied by the live catalog tint. Their shapes also differ: hood/sallet/crown, leathers/plate/mantle, and wraps/greaves/fleetstriders. All **27 equipment combinations** remain available, with unchanged stats.
+Five sheets are resident on the GPU: **body, boots, armor, head, weapon**. Equipment sheets contain three variants, with row index `variant × 8 + direction`. Equipment layers use neutral shading multiplied by the live catalog tint. Their shapes also differ: hood/sallet/crown, leathers/plate/mantle, and wraps/greaves/fleetstriders. All **27 catalog combinations** remain renderable as owned pieces are acquired. Rarity/rolled bonuses belong to the gameplay instance and never change the atlas key/tint or generator. Empty worn slots skip their gear layer; body and weapon still draw.
 
 To avoid wasting GPU memory on empty borders, each layer uses the same fixed crop for **every** frame, row, and variant:
 

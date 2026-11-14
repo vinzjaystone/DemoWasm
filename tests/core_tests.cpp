@@ -553,7 +553,10 @@ void oncePerSwingAndDeath() {
     for (int i = 0; i < 1200 && !world.cleared(); ++i) world.update(1.0f/120.0f);
     CHECK(world.kills == 1);
     CHECK(world.cleared());
-    CHECK(world.player.embers == 15);
+    CHECK(world.player.embers == 0); // Currency is now an explicit ground pickup.
+    CHECK(std::count_if(world.groundLoot.begin(),world.groundLoot.end(),[](const GroundLoot& loot) {
+        return loot.kind==LootKind::Embers && loot.amount==15;
+    })==1);
     tick(world, 1.0f);
     CHECK(world.enemies.empty());
 }
@@ -607,6 +610,17 @@ void deathAndFullRun() {
     CHECK(run.cleared());
     CHECK(run.kills==8 && run.livingEnemies()==0);
     CHECK(run.player.alive());
+    CHECK(run.player.embers==0);
+    std::vector<std::uint32_t> coins;
+    for (const auto& loot:run.groundLoot) if (loot.kind==LootKind::Embers) coins.push_back(loot.id);
+    CHECK(coins.size()==8);
+    // Winning must not make the last enemy's drops inaccessible. Walk to each
+    // cache using the same public pickup intent that a click in the UI issues.
+    for (auto id:coins) {
+        CHECK(run.selectLoot(id));
+        for (int i=0;i<6000 && run.findLoot(id);++i) run.update(1.0f/120);
+        CHECK(!run.findLoot(id));
+    }
     CHECK(run.player.embers==150);
     CHECK(run.player.level()==2);
     const float clearTime = run.elapsed;

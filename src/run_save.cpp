@@ -53,6 +53,18 @@ Navigation navigation(Reader& in,const Grid& grid,float radius) {
     }
     return route;
 }
+void gear(Writer& out,const GearItem& item) {
+    for (auto value:{item.id,static_cast<std::uint32_t>(item.slot),static_cast<std::uint32_t>(item.variant),
+            static_cast<std::uint32_t>(item.rarity),static_cast<std::uint32_t>(item.armorRoll),
+            static_cast<std::uint32_t>(item.speedRoll),static_cast<std::uint32_t>(item.hasteRoll)}) out.u32(value);
+}
+GearItem gear(Reader& in) {
+    GearItem item; item.id=in.u32(); item.slot=static_cast<EquipmentSlot>(integer(in,2));
+    item.variant=integer(in,2); item.rarity=static_cast<Rarity>(integer(in,2));
+    item.armorRoll=integer(in,5); item.speedRoll=integer(in,30); item.hasteRoll=integer(in,6);
+    if (!item.valid()) in.ok=false;
+    return item;
+}
 std::uint32_t mapId(const Grid& grid) {
     Writer out; out.u32(static_cast<std::uint32_t>(grid.width())); out.u32(static_cast<std::uint32_t>(grid.height()));
     for (int y=0;y<grid.height();++y) for (int x=0;x<grid.width();++x) {
@@ -67,7 +79,7 @@ std::uint32_t mapId(const Grid& grid) {
 struct RunCodec {
     static snapshot::Bytes write(const World& world) {
         Writer out;
-        out.u32(1); // Rules/catalog revision, in addition to the envelope version.
+        out.u32(2); // Inventory/rules revision. Envelope and artwork catalog stay at v1.
         out.u32(mapId(world.grid));
         out.number(world.elapsed); out.number(world.hitStop);
         out.u32(static_cast<std::uint32_t>(world.kills)); out.u32(static_cast<std::uint32_t>(world.totalEnemies));
@@ -95,11 +107,22 @@ struct RunCodec {
             for (float value:{enemy.stateTime,enemy.repath,enemy.flash,enemy.animation}) out.number(value);
             out.u32(enemy.lastPlayerAttack); out.boolean(enemy.attackApplied);
         }
+        out.u32(world.nextLootId_); out.u32(world.lootRng_); out.u32(world.selectedLootId_);
+        for (auto slot:EquipmentSlots) {
+            const auto* item=player.equipment.item(slot); out.boolean(item!=nullptr); if (item) gear(out,*item);
+        }
+        for (const auto& cell:player.backpack.cells()) { out.boolean(cell.has_value()); if (cell) gear(out,*cell); }
+        out.u32(static_cast<std::uint32_t>(world.groundLoot.size()));
+        for (const auto& loot:world.groundLoot) {
+            out.u32(loot.id); out.u32(static_cast<std::uint32_t>(loot.kind)); vector(out,loot.position);
+            out.u32(static_cast<std::uint32_t>(loot.amount)); if (loot.kind==LootKind::Gear) gear(out,loot.gear);
+        }
         return snapshot::wrap(RunMagic,out.bytes);
     }
     static std::optional<World> read(Reader& in) {
         World world;
-        if (in.u32()!=1 || in.u32()!=mapId(world.grid)) return std::nullopt;
+        const auto revision=in.u32();
+        if ((revision!=1 && revision!=2) || in.u32()!=mapId(world.grid)) return std::nullopt;
         world.elapsed=number(in,0,LongTimer); world.hitStop=number(in,0,0.1f);
         world.kills=integer(in,static_cast<int>(MaxEnemies)); world.totalEnemies=integer(in,static_cast<int>(MaxEnemies));
         world.nextEnemyId_=in.u32(); world.effectSequence_=in.u32();
@@ -110,10 +133,14 @@ struct RunCodec {
         player.position=position(in,world.grid,Player::Radius); player.facing=direction(in);
         player.knockback=impulse(in); player.dashDirection_=direction(in);
         player.navigation=navigation(in,world.grid,Player::Radius);
-        for (auto slot:{EquipmentSlot::Head,EquipmentSlot::Armor,EquipmentSlot::Boots}) {
-            const int variant=in.u8();
-            if (variant>=static_cast<int>(Equipment::VariantsPerSlot)) { in.ok=false; break; }
-            while (player.equipment.variant(slot)!=variant) player.equipment.cycle(slot);
+        std::array<int,3> variants{};
+        for (auto slot:EquipmentSlots) {
+            const int variant=in.u8(); variants[static_cast<std::size_t>(slot)]=variant==255?-1:variant;
+            if (revision==2 && variant==255) player.equipment.set(slot,std::nullopt);
+            else {
+                if (variant>=static_cast<int>(Equipment::VariantsPerSlot)) { in.ok=false; break; }
+                while (player.equipment.variant(slot)!=variant) player.equipment.cycle(slot);
+            }
         }
         player.health=integer(in,Player::MaxHealth); player.potions=integer(in,3);
         player.experience=integer(in,10000000); player.embers=integer(in,10000000);
@@ -144,6 +171,50 @@ struct RunCodec {
                 (enemy.health>0)!=enemy.alive()) in.ok=false;
             world.enemies.push_back(std::move(enemy));
         }
+        // v1 had immediate ember rewards and only three catalog variants. Give
+        // those exact pieces stable IDs without granting starter spares or
+        // replaying drops for enemies that were already killed in the old run.
+        player.backpack=Backpack{};
+        world.nextLootId_=4;
+        if (revision==2) {
+            world.nextLootId_=in.u32(); world.lootRng_=in.u32(); world.selectedLootId_=in.u32();
+            for (auto slot:EquipmentSlots) player.equipment.set(slot,std::nullopt);
+            for (auto slot:EquipmentSlots) if (in.boolean()) {
+                const auto item=gear(in);
+                if (!player.equipment.set(slot,item)) in.ok=false;
+            }
+            for (std::size_t i=0;i<Backpack::Capacity;++i) if (in.boolean()) {
+                const auto item=gear(in);
+                if (!player.backpack.place(i,item)) in.ok=false;
+            }
+            const auto drops=in.u32();
+            if (!in.ok || drops>MaxGroundLoot) return std::nullopt;
+            world.groundLoot.clear();
+            for (std::uint32_t i=0;i<drops;++i) {
+                GroundLoot loot; loot.id=in.u32(); loot.kind=static_cast<LootKind>(integer(in,2));
+                loot.position=position(in,world.grid,0.04f); loot.amount=integer(in,45);
+                if (loot.kind==LootKind::Gear) loot.gear=gear(in);
+                if (loot.amount<1 || (loot.kind!=LootKind::Embers && loot.amount!=1) ||
+                    (loot.kind==LootKind::Gear && loot.id!=loot.gear.id)) in.ok=false;
+                world.groundLoot.push_back(loot);
+            }
+        }
+        std::set<std::uint32_t> lootIds;
+        const auto unique=[&](std::uint32_t id) {
+            if (id==0 || id>=world.nextLootId_ || !lootIds.insert(id).second) in.ok=false;
+        };
+        for (auto slot:EquipmentSlots) {
+            if (player.equipment.variant(slot)!=variants[static_cast<std::size_t>(slot)]) in.ok=false;
+            if (const auto* item=player.equipment.item(slot)) unique(item->id);
+        }
+        for (const auto& cell:player.backpack.cells()) if (cell) unique(cell->id);
+        for (const auto& loot:world.groundLoot) unique(loot.id);
+        // No valid run can allocate more than six starters + four drops/death.
+        // These limits also leave space for every future kill at runtime.
+        if (world.lootRng_==0 || world.nextLootId_==0 ||
+            world.nextLootId_>7u+static_cast<std::uint32_t>(world.kills)*4u ||
+            lootIds.size()>6u+static_cast<std::size_t>(world.kills)*4u ||
+            (world.selectedLootId_!=0 && (!world.findLoot(world.selectedLootId_) || !player.alive() || world.selectedEnemyId_!=0))) in.ok=false;
         const bool goalUnset=world.targetGoal_==TileCoord{-1,-1};
         if (!in.done() || world.totalEnemies<world.kills || world.livingEnemies()!=world.totalEnemies-world.kills ||
             world.enemies.size()>static_cast<std::size_t>(world.totalEnemies) ||
@@ -159,7 +230,7 @@ snapshot::Bytes encodeRun(const World& world,std::string& error) {
     error.clear();
     const Grid level=Grid::sanctum();
     if (world.grid.width()!=level.width() || world.grid.height()!=level.height() || mapId(world.grid)!=mapId(level) ||
-        world.portal.x!=10.5f || world.portal.y!=2.5f || world.enemies.size()>MaxEnemies ||
+        world.portal.x!=10.5f || world.portal.y!=2.5f || world.enemies.size()>MaxEnemies || world.groundLoot.size()>MaxGroundLoot ||
         world.player.navigation.waypoints.size()>MaxWaypoints || world.player.navigation.next>MaxWaypoints ||
         std::any_of(world.enemies.begin(),world.enemies.end(),[](const Enemy& enemy) {
             return enemy.navigation.waypoints.size()>MaxWaypoints || enemy.navigation.next>MaxWaypoints;

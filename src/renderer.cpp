@@ -165,6 +165,7 @@ void Renderer::prepare(const World& world, const ViewState& view, float frameDt)
     const float tabX = w >= 1100 ? 330.0f : (w >= 760 ? 275.0f : 170.0f);
     layout_.inventoryButton = {tabX,0,w < 760 ? 82.0f : 115.0f,head};
     layout_.helpButton = {tabX+(w < 760 ? 82.0f : 115.0f),0,w < 760 ? 60.0f : 110.0f,head};
+    layout_.backpackButton = {layout_.helpButton.x+layout_.helpButton.width,0,w<760?78.0f:115.0f,head};
     layout_.fullscreenButton = {w-48,head*0.5f-18,36,36};
     layout_.pauseButton = {sceneWidth-60,h-foot+34,36,36};
     if (w < 760) layout_.pauseButton = {sceneWidth-40,h-foot+25,30,30};
@@ -197,6 +198,26 @@ void Renderer::prepare(const World& world, const ViewState& view, float frameDt)
     layout_.loadRun={layout_.modal.x+44+saveWidth,layout_.modal.y+186,saveWidth,32};
     layout_.exportRun={layout_.modal.x+36,layout_.modal.y+228,saveWidth,32};
     layout_.importRun={layout_.modal.x+44+saveWidth,layout_.modal.y+228,saveWidth,32};
+    layout_.pickupButton={20,h-foot-64,104,28};
+    const float bagWidth=std::min(920.0f,w-24),bagHeight=std::min(680.0f,h-24);
+    layout_.bagPanel={(w-bagWidth)*0.5f,(h-bagHeight)*0.5f,bagWidth,bagHeight};
+    const Rectangle bag=layout_.bagPanel;
+    const float leftWidth=(bag.width-60)*0.58f,detailX=bag.x+40+leftWidth;
+    const float detailWidth=bag.x+bag.width-detailX-20;
+    const float wornHeight=bagHeight<540?48.0f:60.0f;
+    for (std::size_t i=0;i<3;++i)
+        layout_.bagWorn[i]={bag.x+20+static_cast<float>(i)*(leftWidth+6)/3,bag.y+74,(leftWidth-12)/3,wornHeight};
+    const float gridY=bag.y+74+wornHeight+40;
+    const float cell=std::min({70.0f,(leftWidth-30)/6,(bag.y+bag.height-88-gridY-18)/4});
+    for (std::size_t i=0;i<Backpack::Capacity;++i)
+        layout_.bagCells[i]={bag.x+20+static_cast<float>(i%6)*(cell+6),gridY+static_cast<float>(i/6)*(cell+6),cell,cell};
+    layout_.bagDetails={detailX,bag.y+74,detailWidth,bag.height-100};
+    layout_.bagClose={bag.x+bag.width-126,bag.y+18,106,30};
+    layout_.bagEquip={detailX,bag.y+bag.height-168,detailWidth,32};
+    layout_.bagDrop={detailX,bag.y+bag.height-130,detailWidth*0.42f-3,30};
+    layout_.bagSalvage={detailX+detailWidth*0.42f+3,bag.y+bag.height-130,detailWidth*0.58f-3,30};
+    layout_.bagCraft={detailX,bag.y+bag.height-92,detailWidth,30};
+    layout_.bagSort={bag.x+20,bag.y+bag.height-60,leftWidth,28};
     camera_.target = rv(iso_.worldToScreen({10,10}));
     camera_.offset = {sceneWidth*0.5f,head+layout_.scene.height*0.57f};
     camera_.rotation = 0;
@@ -226,14 +247,43 @@ std::uint32_t Renderer::pickEnemy(Vector2 mouse, const World& world) const {
     }
     return picked;
 }
+std::uint32_t Renderer::pickLoot(Vector2 mouse,const World& world) const {
+    std::uint32_t picked=0;
+    float nearest=24.0f;
+    for (const auto& loot:world.groundLoot) {
+        const auto feet=worldToScreen(loot.position);
+        const float dx=feet.x-mouse.x,dy=feet.y-7*camera_.zoom-mouse.y;
+        const float distancePixels=std::sqrt(dx*dx+dy*dy);
+        if (distancePixels<nearest || (distancePixels==nearest && loot.id<picked)) { nearest=distancePixels; picked=loot.id; }
+    }
+    return picked;
+}
+std::uint32_t Renderer::pickInventory(Vector2 mouse,const World& world,const ViewState& view) const {
+    if (!view.backpack || !world.player.alive()) return 0;
+    for (std::size_t i=0;i<Backpack::Capacity;++i)
+        if (inside(mouse,layout_.bagCells[i]) && world.player.backpack.cells()[i]) return world.player.backpack.cells()[i]->id;
+    for (auto slot:EquipmentSlots)
+        if (inside(mouse,layout_.bagWorn[static_cast<std::size_t>(slot)]))
+            if (const auto* item=world.player.equipment.item(slot)) return item->id;
+    return 0;
+}
 bool Renderer::sceneContains(Vector2 mouse, const World& world, const ViewState& view) const {
-    return !view.paused && !view.help && world.player.alive() && !world.cleared() &&
+    return !view.backpack && !view.modal(world) &&
            inside(mouse,layout_.scene) && !inside(mouse,layout_.targetHud) &&
            !(layout_.sidebarVisible && inside(mouse,layout_.sidebar)) &&
            hitTest(mouse,world,view) == UiAction::None;
 }
 UiAction Renderer::hitTest(Vector2 mouse, const World& world, const ViewState& view) const {
-    if (view.help || view.paused || !world.player.alive() || world.cleared()) {
+    if (view.backpack) {
+        if (inside(mouse,layout_.bagClose)) return UiAction::ToggleBackpack;
+        if (inside(mouse,layout_.bagEquip)) return UiAction::EquipItem;
+        if (inside(mouse,layout_.bagDrop)) return UiAction::DropItem;
+        if (inside(mouse,layout_.bagSalvage)) return UiAction::SalvageItem;
+        if (inside(mouse,layout_.bagSort)) return UiAction::SortItems;
+        if (inside(mouse,layout_.bagCraft)) return UiAction::CraftFlask;
+        return UiAction::None;
+    }
+    if (view.modal(world)) {
         if (!view.help) {
             if (inside(mouse,layout_.saveRun)) return UiAction::SaveRun;
             if (inside(mouse,layout_.loadRun)) return UiAction::LoadRun;
@@ -241,11 +291,14 @@ UiAction Renderer::hitTest(Vector2 mouse, const World& world, const ViewState& v
             if (inside(mouse,layout_.importRun)) return UiAction::ImportRun;
         }
         if (inside(mouse,layout_.modalPrimary)) return view.help ? UiAction::ToggleHelp :
-            (view.paused && world.player.alive() && !world.cleared() ? UiAction::TogglePause : UiAction::Restart);
-        if (view.paused && !view.help && inside(mouse,layout_.modalSecondary)) return UiAction::Restart;
+            (world.cleared() && world.player.alive()?UiAction::ContinueLooting:
+             (view.paused && world.player.alive()?UiAction::TogglePause:UiAction::Restart));
+        if (!view.help && (view.paused || world.cleared()) && inside(mouse,layout_.modalSecondary)) return UiAction::Restart;
         return UiAction::None;
     }
     if (inside(mouse,layout_.inventoryButton)) return UiAction::ToggleInventory;
+    if (inside(mouse,layout_.backpackButton)) return UiAction::ToggleBackpack;
+    if (inside(mouse,layout_.pickupButton)) return UiAction::Pickup;
     if (inside(mouse,layout_.helpButton)) return UiAction::ToggleHelp;
     if (inside(mouse,layout_.fullscreenButton)) return UiAction::Fullscreen;
     if (inside(mouse,layout_.pauseButton)) return UiAction::TogglePause;
@@ -288,7 +341,8 @@ void Renderer::draw(const World& world, const ViewState& view) {
     EndScissorMode();
     drawHud(world,view);
     if (view.inventory) drawSidebar(world);
-    if (view.help || view.paused || !world.player.alive() || world.cleared()) drawModal(world,view);
+    if (view.backpack) drawBackpack(world,view);
+    else if (view.modal(world)) drawModal(world,view);
     EndDrawing();
 }
 void Renderer::drawFloor(const World& world, const ViewState& view) {
@@ -388,6 +442,7 @@ void Renderer::drawDungeon(const World& world, const ViewState& view) {
     drawFloor(world,view);
     const std::uint32_t hovered = sceneContains(GetMousePosition(),world,view) ?
         pickEnemy(GetMousePosition(),world) : 0;
+    const std::uint32_t hoveredLoot=sceneContains(GetMousePosition(),world,view) && hovered==0?pickLoot(GetMousePosition(),world):0;
     if (sceneContains(GetMousePosition(),world,view) && hovered==0) {
         const TileCoord hover = tileAt(screenToWorld(GetMousePosition()));
         if (world.grid.hasFloor(hover)) {
@@ -434,6 +489,8 @@ void Renderer::drawDungeon(const World& world, const ViewState& view) {
     drawList_.push_back({iso_.worldToScreen(world.portal).y,1,0,{}});
     for (std::size_t i = 0; i < world.enemies.size(); ++i)
         drawList_.push_back({iso_.worldToScreen(world.enemies[i].position).y,2,i,{}});
+    for (std::size_t i=0;i<world.groundLoot.size();++i)
+        drawList_.push_back({iso_.worldToScreen(world.groundLoot[i].position).y,4,i,{}});
     drawList_.push_back({iso_.worldToScreen(world.player.position).y,3,0,{}});
     std::stable_sort(drawList_.begin(),drawList_.end(),[](const DrawItem& a,const DrawItem& b) {
         return a.depth < b.depth;
@@ -448,6 +505,11 @@ void Renderer::drawDungeon(const World& world, const ViewState& view) {
                 break;
             }
             case 3: drawHero(rv(iso_.worldToScreen(world.player.position)),world.player,1.0f); break;
+            case 4: {
+                const auto& loot=world.groundLoot[item.index];
+                drawLoot(loot,loot.id==world.selectedLootId() || loot.id==hoveredLoot);
+                break;
+            }
             default: break;
         }
     }
@@ -523,6 +585,25 @@ void Renderer::drawObstacle(const World& world, TileCoord tile) {
         }
     }
 }
+void Renderer::drawLoot(const GroundLoot& loot,bool selected) const {
+    const Vector2 feet=rv(iso_.worldToScreen(loot.position));
+    const Color color=tint(loot.color());
+    DrawEllipse(static_cast<int>(feet.x),static_cast<int>(feet.y+2),12,5,alpha(color,0.12f));
+    const float lift=5+std::sin(time_*2+static_cast<float>(loot.id))*1.4f;
+    const Vector2 marker{feet.x,feet.y-lift};
+    const float beam=loot.kind==LootKind::Gear && loot.gear.rarity==Rarity::Relic?38.0f:22.0f;
+    line(feet,{feet.x,feet.y-beam},selected?2.0f:1.0f,alpha(color,selected?0.7f:0.22f));
+    diamond(marker,8,5,Background);
+    diamondOutline(marker,8,5,color);
+    icon(loot.kind==LootKind::Flask?6:(loot.kind==LootKind::Embers?8:
+         (loot.gear.slot==EquipmentSlot::Head?3:(loot.gear.slot==EquipmentSlot::Armor?1:2))),marker,9,color);
+    if (selected || IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT)) {
+        const std::string name=loot.name();
+        const float width=textWidth(name.c_str(),10,0.1f)+16;
+        DrawRectangleRec({feet.x-width*0.5f,feet.y-beam-22,width,18},alpha(Background,0.94f));
+        centered(name.c_str(),feet.x,feet.y-beam-18,10,color,0.1f);
+    }
+}
 void Renderer::drawPortal(const World& world) {
     const Vector2 p = rv(iso_.worldToScreen(world.portal));
     const Color glow = world.cleared() ? Gold : Color{110,155,145,255};
@@ -582,7 +663,8 @@ void Renderer::drawHero(Vector2 feet, const Player& player, float scale, bool pr
     shape({{-10,-34},{10,-34},{14,-4},{3,-9},{-9,-2},{-14,-6}},shade(armor,armorVariant==2?0.65f:0.42f));
     line(p(-5,-22),p(-6,-6),5*scale,Color{80,72,59,255});
     line(p(5,-22),p(6,-6),5*scale,Color{80,72,59,255});
-    // Boots.
+    // Boots (the base legs remain visible in an empty equipment slot).
+    if (bootsVariant>=0) {
     const float bootHeight = bootsVariant == 1 ? 14.0f : 10.0f;
     quad(p(-9,-bootHeight+gait),p(-2,-bootHeight+gait),p(-2,1+gait),p(-11,1+gait),boots);
     quad(p(2,-bootHeight-gait),p(9,-bootHeight-gait),p(11,1-gait),p(2,1-gait),shade(boots,0.76f));
@@ -592,7 +674,12 @@ void Renderer::drawHero(Vector2 feet, const Player& player, float scale, bool pr
         line(p(-9,-6+gait),p(-3,-6+gait),1.5f*scale,Gold);
         line(p(3,-6-gait),p(9,-6-gait),1.5f*scale,Gold);
     }
+    } else {
+        line(p(-6,-6+gait),p(-7,1+gait),5*scale,Color{187,151,103,255});
+        line(p(6,-6-gait),p(7,1-gait),5*scale,Color{154,121,84,255});
+    }
     // Armor, shoulder pieces, and bracers.
+    if (armorVariant>=0) {
     shape({{-8,-36+breath},{8,-36+breath},{12,-29},{8,-15},{-8,-15},{-12,-29}},shade(armor,0.65f));
     shape({{-7,-34+breath},{7,-34+breath},{8,-24},{4,-16},{-7,-18},{-9,-26}},armor);
     shape({{0,-33+breath},{7,-32+breath},{8,-24},{4,-16},{0,-17}},shade(armor,0.78f));
@@ -612,8 +699,12 @@ void Renderer::drawHero(Vector2 feet, const Player& player, float scale, bool pr
     } else {
         line(p(-7,-33),p(6,-17),2*scale,Color{186,149,96,255});
     }
+    }
     // Head. The variants intentionally alter silhouette, not just tint.
-    if (headVariant == 0) {
+    if (headVariant<0) {
+        DrawCircleV(p(0,-42+breath),7*scale,Color{187,151,103,255});
+        line(p(-3,-42+breath),p(3,-42+breath),1.5f*scale,Color{48,40,29,255});
+    } else if (headVariant == 0) {
         shape({{0,-55+breath},{9,-47+breath},{9,-35+breath},{-9,-35+breath},{-10,-45+breath}},shade(head,0.56f));
         shape({{0,-53+breath},{7,-46+breath},{7,-37+breath},{-7,-37+breath},{-8,-45+breath}},head);
         shape({{0,-49+breath},{5,-44+breath},{4,-38+breath},{-4,-38+breath},{-5,-44+breath}},Color{43,43,35,255});
@@ -732,6 +823,7 @@ void Renderer::drawHud(const World& world, const ViewState& view) const {
     };
     tab(layout_.inventoryButton,w<760?"GEAR":"CHARACTER",view.inventory);
     tab(layout_.helpButton,w<760?"HELP":"FIELD GUIDE",view.help);
+    tab(layout_.backpackButton,w<760?"BAG [B]":"BACKPACK [B]",view.backpack);
     if (w>=1000) {
         DrawCircleV({w-203,layout_.header.height*0.5f},2.5f,Teal);
 #ifdef __EMSCRIPTEN__
@@ -790,6 +882,13 @@ void Renderer::drawHud(const World& world, const ViewState& view) const {
         DrawRectangleRec(b.first,inside(GetMousePosition(),b.first)?Raised:alpha(Panel,0.8f));
         DrawRectangleLinesEx(b.first,1,Border);
         centered(b.second,b.first.x+15,b.first.y+8,14,Muted);
+    }
+    DrawRectangleRec(layout_.pickupButton,inside(GetMousePosition(),layout_.pickupButton)?Raised:Panel);
+    DrawRectangleLinesEx(layout_.pickupButton,1,world.nearbyLoot()?Gold:Border);
+    centered("LOOT [E]",layout_.pickupButton.x+52,layout_.pickupButton.y+9,9,world.nearbyLoot()?Gold:Muted);
+    if (const auto* loot=world.nearbyLoot(); loot && sceneWidth>640) {
+        const std::string hint=loot->name()+"  /  click or E to collect";
+        text(hint.c_str(),134,layout_.pickupButton.y+9,10,tint(loot->color()),0.2f);
     }
     // Persistent action bar. Buttons and keyboard commands share the same actions.
     DrawRectangleRec(layout_.footer,Panel);
@@ -906,9 +1005,10 @@ void Renderer::drawSidebar(const World& world) const {
         text(title,r.x+64,r.y+10,8,Muted,1.5f);
         text(gear.name.data(),r.x+64,r.y+25,13,Ink,0.3f);
         char stats[48];
-        const int aspd = static_cast<int>(std::lround(gear.attackSpeedBonus*100));
-        if (aspd!=0) std::snprintf(stats,sizeof(stats),"%d ARM  %+d%% ASPD",gear.armor,aspd);
-        else std::snprintf(stats,sizeof(stats),"+%d ARMOR",gear.armor);
+        const auto* item=world.player.equipment.item(equipmentSlot);
+        const int aspd = item?static_cast<int>(std::lround(item->attackSpeedBonus()*100)):0;
+        if (aspd!=0) std::snprintf(stats,sizeof(stats),"%d ARM  %+d%% ASPD",item->armor(),aspd);
+        else std::snprintf(stats,sizeof(stats),"+%d ARMOR",item?item->armor():0);
         text(stats,r.x+64,r.y+45,8,Gold,0.4f);
         text(key,r.x+r.width-20,r.y+10,8,Dim);
         text(">",r.x+r.width-18,r.y+36,11,hover?Gold:Dim);
@@ -916,7 +1016,7 @@ void Renderer::drawSidebar(const World& world) const {
     slot(layout_.headSlot,EquipmentSlot::Head,3,"HEAD","1");
     slot(layout_.armorSlot,EquipmentSlot::Armor,1,"ARMOR","2");
     slot(layout_.bootsSlot,EquipmentSlot::Boots,2,"BOOTS","3");
-    centered("CLICK A SLOT TO CHANGE EQUIPMENT",centerX,side.y+488,8,Dim,0.7f);
+    centered("1 / 2 / 3: OWNED SPARES   B: BACKPACK",centerX,side.y+488,8,Dim,0.1f);
     const auto artButton=[&](Rectangle r,const char* title) {
         DrawRectangleRec(r,inside(GetMousePosition(),r)?Color{37,46,46,255}:Panel);
         DrawRectangleLinesEx(r,1,Border);
@@ -989,8 +1089,8 @@ void Renderer::drawModal(const World& world,const ViewState& view) const {
         const std::array<Row,7> rows = {{{"LMB","Move / Target","Ground: move. Monster: chase and auto-attack."},
             {"RMB / SPACE","Cleave","Manual aim. ASPD sets the 2-3s strike interval."},
             {"SHIFT","Dodge","Dash toward the cursor. Briefly invulnerable."},
-            {"Q","Heal","Recover 50 vitality. Three flasks per run."},
-            {"1 / 2 / 3","Equip","Cycle head, armor, and boots. Stats are live."},
+            {"Q / E","Heal / Loot","Q: drink a flask. E: collect nearby drops."},
+            {"B / 1,2,3","Backpack / Equip","B: manage loot. 1-3: swap OWNED spares."},
             {"K / L","Save / Load","One local run slot. Load pauses; R starts fresh."},
             {"ESC / P","Pause","I: character   U: import gear art   R: restart"}}};
         const float keyWidth = r.width>450?100.0f:82.0f;
@@ -1009,7 +1109,7 @@ void Renderer::drawModal(const World& world,const ViewState& view) const {
         std::snprintf(progress,sizeof(progress),"%d HOLLOW SILENCED  /  %d EMBERS",world.kills,world.player.embers);
         centered(progress,cx,r.y+158,10,Gold,1.0f);
         button(layout_.modalPrimary,"REKINDLE  /  NEW RUN",true);
-    } else if (world.cleared()) {
+    } else if (world.cleared() && !view.victoryAcknowledged) {
         centered("SANCTUM CLEARED",cx,r.y+80,23,Ink,2);
         centered("The hollow are silent. Your oath endures.",cx,r.y+118,11,Muted,0.5f);
         char progress[90];
@@ -1017,7 +1117,8 @@ void Renderer::drawModal(const World& world,const ViewState& view) const {
         std::snprintf(progress,sizeof(progress),"%d EMBERS  /  %02d:%02d  /  LEVEL %d",
                       world.player.embers,seconds/60,seconds%60,world.player.level());
         centered(progress,cx,r.y+159,11,Gold);
-        button(layout_.modalPrimary,"DESCEND AGAIN",true);
+        button(layout_.modalSecondary,"DESCEND AGAIN / NEW RUN");
+        button(layout_.modalPrimary,"COLLECT THE SPOILS",true);
     } else {
         centered("A MOMENT OF RESPITE",cx,r.y+79,21,Ink,1.4f);
         centered("The ruins can wait. Keep your flame.",cx,r.y+118,11,Muted,0.5f);

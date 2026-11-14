@@ -39,7 +39,38 @@ public:
     void action(UiAction command) {
         switch (command) {
             case UiAction::ToggleInventory: view.inventory = !view.inventory; break;
-            case UiAction::ToggleHelp: view.help = !view.help; break;
+            case UiAction::ToggleBackpack:
+                if (!world.player.alive() || view.help) break;
+                cancelRunRead(true); view.backpack=!view.backpack; view.confirmSalvage=0;
+                if (!world.ownedItem(view.selectedItem)) {
+                    view.selectedItem=0;
+                    for (const auto& cell:world.player.backpack.cells()) if (cell) { view.selectedItem=cell->id; break; }
+                    if (view.selectedItem==0) for (auto slot:EquipmentSlots)
+                        if (const auto* item=world.player.equipment.item(slot)) { view.selectedItem=item->id; break; }
+                }
+                break;
+            case UiAction::EquipItem: {
+                cancelRunRead(true); view.confirmSalvage=0;
+                if (const auto* item=world.ownedItem(view.selectedItem)) {
+                    const auto slot=item->slot;
+                    if (world.wornItem(view.selectedItem)) world.unequipItem(slot);
+                    else world.equipItem(view.selectedItem);
+                }
+                break;
+            }
+            case UiAction::DropItem: cancelRunRead(true); view.confirmSalvage=0; world.dropItem(view.selectedItem); break;
+            case UiAction::SalvageItem:
+                cancelRunRead(true);
+                if (world.player.backpack.find(view.selectedItem)) {
+                    if (view.confirmSalvage==view.selectedItem) { world.salvageItem(view.selectedItem); view.confirmSalvage=0; }
+                    else { view.confirmSalvage=view.selectedItem; world.notify("Salvage permanently consumes this item. Click CONFIRM to continue.",8); }
+                }
+                break;
+            case UiAction::SortItems: cancelRunRead(true); world.player.backpack.sort(); view.confirmSalvage=0; break;
+            case UiAction::CraftFlask: cancelRunRead(true); view.confirmSalvage=0; world.craftFlask(); break;
+            case UiAction::Pickup: world.pickupNearby(); break;
+            case UiAction::ContinueLooting: view.victoryAcknowledged=true; view.paused=false; break;
+            case UiAction::ToggleHelp: view.help = !view.help; view.backpack=false; view.confirmSalvage=0; break;
             case UiAction::TogglePause: view.paused = !view.paused; break;
             case UiAction::SaveRun: saveRun(false); break;
             case UiAction::LoadRun: loadRun(); break;
@@ -54,7 +85,7 @@ public:
                 break;
             case UiAction::Restart:
                 cancelRunRead();
-                world.reset(); saveStatus=0; view.saveMessage.clear(); ++restartSerial; view.paused = false; view.help = false; accumulator_ = 0;
+                world.reset(); view.backpack=false; view.victoryAcknowledged=false; view.selectedItem=4; view.confirmSalvage=0; saveStatus=0; view.saveMessage.clear(); ++restartSerial; view.paused = false; view.help = false; accumulator_ = 0;
                 aim = world.player.position+world.player.facing;
                 renderer.resetPlayerAnimation(world.player);
                 world.notify("A new descent. The same oath.",3.0f);
@@ -129,7 +160,7 @@ public:
         std::string error; auto staged=save::decodeRun(bytes,size,error);
         if (!staged) { saveStatus=-3; saveMessage(error); return false; }
         world=std::move(*staged); ++loadSerial; saveStatus=4;
-        view.paused=true; view.help=false; accumulator_=0;
+        view.paused=true; view.help=false; view.backpack=false; view.victoryAcknowledged=false; view.selectedItem=0; view.confirmSalvage=0; accumulator_=0;
         aim=world.player.position+world.player.facing;
         renderer.resetPlayerAnimation(world.player);
         renderer.prepare(world,view,0);
@@ -182,12 +213,14 @@ public:
         // Cancel when the intent arrives, not only at the next RAF: a pending
         // load must not clear a newly buffered Restart/Save/Load key first.
         if (key==KEY_R || key==KEY_K || key==KEY_L) cancelRunRead();
+        if (key==KEY_B) cancelRunRead(true);
         if (key>=0 && key<static_cast<int>(queuedKeys_.size())) queuedKeys_[static_cast<std::size_t>(key)] = true;
     }
     void queueMouse(int button,Vector2 position) {
         if (button==0) {
             const auto command=renderer.hitTest(position,world,view);
             if (command==UiAction::Restart || command==UiAction::SaveRun || command==UiAction::LoadRun || command==UiAction::ImportRun) cancelRunRead();
+            if (command==UiAction::ToggleBackpack) cancelRunRead(true);
             leftQueued_ = true; leftPosition_ = position;
         }
         if (button==2) { rightQueued_ = true; rightPosition_ = position; }
@@ -221,32 +254,39 @@ public:
         }
 #endif
         if (pressed(KEY_I)) action(UiAction::ToggleInventory);
+        if (pressed(KEY_B)) action(UiAction::ToggleBackpack);
         if (pressed(KEY_H) || pressed(KEY_F1)) action(UiAction::ToggleHelp);
         if (pressed(KEY_F)) action(UiAction::Fullscreen);
         if (pressed(KEY_G)) view.showGrid = !view.showGrid;
         if (pressed(KEY_ESCAPE) || pressed(KEY_P)) {
-            if (view.help) view.help = false;
-            else if (world.player.alive() && !world.cleared()) action(UiAction::TogglePause);
+            if (view.backpack) action(UiAction::ToggleBackpack);
+            else if (view.help) view.help = false;
+            else if (world.player.alive() && (!world.cleared() || view.victoryAcknowledged)) action(UiAction::TogglePause);
         }
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || leftQueued_) {
             const Vector2 point = leftQueued_ ? leftPosition_ : mouse;
             const UiAction clicked = renderer.hitTest(point,world,view);
-            if (clicked != UiAction::None) action(clicked);
+            const auto item=renderer.pickInventory(point,world,view);
+            if (item!=0) { view.selectedItem=item; view.confirmSalvage=0; }
+            else if (clicked != UiAction::None) action(clicked);
             else if (renderer.sceneContains(point,world,view)) {
                 const std::uint32_t enemy = renderer.pickEnemy(point,world);
+                const auto loot=renderer.pickLoot(point,world);
                 if (enemy!=0) world.selectEnemy(enemy);
+                else if (loot!=0) world.selectLoot(loot);
                 else {
                     world.movePlayerTo(renderer.screenToWorld(point));
                     ++groundSerial;
                 }
             }
         }
-        const bool running = !view.paused && !view.help && world.player.alive() && !world.cleared();
+        const bool running = !view.backpack && !view.modal(world);
         if (running) {
             if (pressed(KEY_ONE)) action(UiAction::CycleHead);
             if (pressed(KEY_TWO)) action(UiAction::CycleArmor);
             if (pressed(KEY_THREE)) action(UiAction::CycleBoots);
             if (pressed(KEY_Q)) action(UiAction::Heal);
+            if (pressed(KEY_E)) action(UiAction::Pickup);
             if (pressed(KEY_LEFT_SHIFT) || pressed(KEY_RIGHT_SHIFT)) action(UiAction::Dash);
             const bool queuedAttack = rightQueued_ && renderer.sceneContains(rightPosition_,world,view);
             if (queuedAttack) aim = renderer.screenToWorld(rightPosition_);
@@ -255,10 +295,10 @@ public:
             if (inScene) view.zoom = std::clamp(view.zoom+GetMouseWheelMove()*0.08f,0.7f,1.65f);
         }
         constexpr float step = 1.0f/120.0f;
-        if (!view.paused && !view.help) {
+        if (!view.paused && !view.help && !view.backpack && (!world.cleared() || view.victoryAcknowledged)) {
             accumulator_ = std::min(0.1f,accumulator_+dt);
             while (accumulator_ >= step) {
-                const bool animating=world.player.alive() && !world.cleared() && world.hitStop<=0;
+                const bool animating=world.player.alive() && world.hitStop<=0;
                 world.update(step);
                 renderer.animatePlayer(world.player,animating?step:0,true);
                 accumulator_ -= step;
@@ -266,24 +306,39 @@ public:
         } else accumulator_ = 0; // Never catch up time spent paused or in another tab.
         // Synchronize input-only facing/attack changes even on a frame with no
         // simulation step. Presentation never writes back to the simulation.
-        renderer.animatePlayer(world.player,0,!view.paused && !view.help);
+        renderer.animatePlayer(world.player,0,!view.paused && !view.help && !view.backpack);
         // Keep layout/camera changes (inventory, help, zoom) in sync with the
         // state rendered this frame, rather than waiting another browser RAF.
         renderer.prepare(world,view,0);
         const bool overScene = renderer.sceneContains(mouse,world,view);
-        SetMouseCursor(renderer.hitTest(mouse,world,view)!=UiAction::None ||
-                       (overScene && renderer.pickEnemy(mouse,world)!=0) ? MOUSE_CURSOR_POINTING_HAND :
+        SetMouseCursor(renderer.hitTest(mouse,world,view)!=UiAction::None || renderer.pickInventory(mouse,world,view)!=0 ||
+                       (overScene && (renderer.pickEnemy(mouse,world)!=0 || renderer.pickLoot(mouse,world)!=0)) ? MOUSE_CURSOR_POINTING_HAND :
                        (overScene ? MOUSE_CURSOR_CROSSHAIR : MOUSE_CURSOR_DEFAULT));
+#ifdef __EMSCRIPTEN__
+        if (lastBackpackOverlay_!=view.backpack) {
+            if (view.backpack) EM_ASM({ document.getElementById('sprite-editor-link').hidden=true; },0);
+            else EM_ASM({ document.getElementById('sprite-editor-link').hidden=false; },0);
+            lastBackpackOverlay_=view.backpack;
+        }
+#endif
         renderer.draw(world,view);
         queuedKeys_.fill(false);
         leftQueued_ = rightQueued_ = false;
     }
 private:
-    void cancelRunRead() {
+    void cancelRunRead(bool preserveWrites=false) {
 #ifdef __EMSCRIPTEN__
-        EM_ASM({ if(Module.snapshotStore) Module.snapshotStore.cancel(); },0);
+        if (preserveWrites) {
+            const bool cancelled=EM_ASM_INT({ return Module.snapshotStore?Module.snapshotStore.cancelRead():0; },0)!=0;
+            if (cancelled) { saveStatus=0; ++saveEventSerial; saveMessage("Pending run load cancelled. Current run kept."); }
+        } else EM_ASM({ if(Module.snapshotStore) Module.snapshotStore.cancel(); },0);
+#else
+        static_cast<void>(preserveWrites);
 #endif
     }
+#ifdef __EMSCRIPTEN__
+    bool lastBackpackOverlay_=false;
+#endif
     float accumulator_ = 0;
     std::array<bool,512> queuedKeys_{};
     bool leftQueued_ = false, rightQueued_ = false;
@@ -410,6 +465,50 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
     }
     if (written+3<sizeof(json)) std::snprintf(json+written,sizeof(json)-written,"]}");
     return json;
+}
+extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_loot_state() {
+    static std::string json; json.clear(); json.reserve(65536);
+    char buffer[1024];
+    const auto& world=app->world; const auto& l=app->renderer.layout();
+    std::snprintf(buffer,sizeof(buffer),
+        "{\"open\":%s,\"selectedItem\":%u,\"confirmSalvage\":%u,\"lootTarget\":%u,\"cleared\":%s,\"victoryAcknowledged\":%s,\"embers\":%d,\"potions\":%d,\"experience\":%d,\"count\":%zu,\"buttons\":{",
+        app->view.backpack?"true":"false",app->view.selectedItem,app->view.confirmSalvage,world.selectedLootId(),
+        world.cleared()?"true":"false",app->view.victoryAcknowledged?"true":"false",world.player.embers,world.player.potions,world.player.experience,world.player.backpack.size());
+    json+=buffer;
+    const auto rect=[&](const char* name,Rectangle r,bool comma) {
+        std::snprintf(buffer,sizeof(buffer),"%s\"%s\":{\"x\":%.2f,\"y\":%.2f,\"width\":%.2f,\"height\":%.2f}",comma?",":"",name,
+            static_cast<double>(r.x),static_cast<double>(r.y),static_cast<double>(r.width),static_cast<double>(r.height)); json+=buffer;
+    };
+    rect("panel",l.bagPanel,false); rect("equip",l.bagEquip,true); rect("drop",l.bagDrop,true);
+    rect("salvage",l.bagSalvage,true); rect("sort",l.bagSort,true); rect("craft",l.bagCraft,true);
+    rect("close",l.bagClose,true); rect("pickup",l.pickupButton,true); rect("victory",l.modalPrimary,true);
+    json+="},\"bag\":[";
+    const auto item=[&](const ashfall::GearItem& value) {
+        std::snprintf(buffer,sizeof(buffer),"\"id\":%u,\"slot\":%zu,\"variant\":%d,\"rarity\":%d,\"armorRoll\":%d,\"speedRoll\":%d,\"hasteRoll\":%d,\"armor\":%d,\"speed\":%.4f,\"haste\":%.4f,\"salvage\":%d",
+            value.id,static_cast<std::size_t>(value.slot),value.variant,static_cast<int>(value.rarity),value.armorRoll,value.speedRoll,value.hasteRoll,
+            value.armor(),static_cast<double>(value.speedBonus()),static_cast<double>(value.attackSpeedBonus()),value.salvageValue()); json+=buffer;
+    };
+    bool comma=false;
+    for (std::size_t i=0;i<ashfall::Backpack::Capacity;++i) if (const auto& cell=world.player.backpack.cells()[i]) {
+        json+=comma?",{":"{"; comma=true; item(*cell);
+        std::snprintf(buffer,sizeof(buffer),",\"cell\":%zu,",i); json+=buffer; rect("rect",l.bagCells[i],false); json+='}';
+    }
+    json+="],\"worn\":["; comma=false;
+    for (auto slot:ashfall::EquipmentSlots) if (const auto* value=world.player.equipment.item(slot)) {
+        json+=comma?",{":"{"; comma=true; item(*value); rect("rect",l.bagWorn[static_cast<std::size_t>(slot)],true); json+='}';
+    }
+    json+="],\"ground\":["; comma=false;
+    for (const auto& drop:world.groundLoot) {
+        json+=comma?",{":"{"; comma=true;
+        const auto screen=app->renderer.worldToScreen(drop.position);
+        std::snprintf(buffer,sizeof(buffer),"\"dropId\":%u,\"kind\":%d,\"amount\":%d,\"x\":%.4f,\"y\":%.4f,\"screenX\":%.2f,\"screenY\":%.2f,\"reachable\":%s",
+            drop.id,static_cast<int>(drop.kind),drop.amount,static_cast<double>(drop.position.x),static_cast<double>(drop.position.y),
+            static_cast<double>(screen.x),static_cast<double>(screen.y),world.canReachLoot(drop)?"true":"false"); json+=buffer;
+        if (drop.kind==ashfall::LootKind::Gear) { json+=','; item(drop.gear); }
+        json+='}';
+    }
+    json+="]}";
+    return json.c_str();
 }
 #endif
 

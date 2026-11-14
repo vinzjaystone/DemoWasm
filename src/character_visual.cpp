@@ -148,6 +148,7 @@ bool Sprites::draw(Vector2 feet,Pose pose,const Equipment& equipment,float scale
     if (weaponBehind(pose)) draw(Layer::Weapon,0,wash);
     draw(Layer::Base,0,wash);
     for (EquipmentSlot slot : {EquipmentSlot::Boots,EquipmentSlot::Armor,EquipmentSlot::Head}) {
+        if (!equipment.item(slot)) continue;
         const Layer layer=art::layer(slot);
         const auto& item=equipment.get(slot);
         const Color color{item.tint.r,item.tint.g,item.tint.b,255};
