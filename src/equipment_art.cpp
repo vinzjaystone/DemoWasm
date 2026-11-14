@@ -155,11 +155,15 @@ bool Workspace::select(Key key) {
     syncedStamp_=document_.stamp(); return true;
 }
 void Workspace::open(Project project) {
-    project_=std::move(project); saved_=project_; dirty_=false;
+    project_=std::move(project); saved_=project_; dirty_=false; recovered_=false;
     key_=project_.frames().empty()?Key{}:project_.frames().begin()->first;
     document_.replace(bitmap(project_.frame(key_))); syncedStamp_=document_.stamp();
 }
-void Workspace::markSaved() { document_.commitStroke(); sync(); saved_=project_; dirty_=false; document_.markSaved(); }
+bool Workspace::recover(Project project,Key key) {
+    if (!key.valid() || !validName(project.name)) return false;
+    open(std::move(project)); select(key); recovered_=true; return true;
+}
+void Workspace::markSaved() { recovered_=false; document_.commitStroke(); sync(); saved_=project_; dirty_=false; document_.markSaved(); }
 bool Workspace::rename(const std::string& name) {
     if (!validName(name) || name==project_.name) return false;
     project_.name=name; dirty_=project_!=saved_; return true;

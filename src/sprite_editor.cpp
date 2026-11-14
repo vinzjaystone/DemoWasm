@@ -1,5 +1,8 @@
 #include "character_visual.h"
 #include "equipment_browser.h"
+#include "editor_recovery.h"
+#include "snapshot_browser.h"
+#include "local_store.h"
 #include "raylib.h"
 #include <algorithm>
 #include <array>
@@ -91,11 +94,11 @@ struct OwnedImage {
 }
 
 enum class Tool { Pencil, Eraser, Fill, Picker, Line, Rectangle };
-enum class Modal { None, New, Import, Leave, Help, Overwrite, OpenHint, Builtin, ProjectImport };
+enum class Modal { None, New, Import, Leave, Help, Overwrite, OpenHint, Builtin, ProjectImport, Recovery };
 struct Layout {
     Rectangle workspace{}, canvas{}, inspector{}, dock{}, back{}, create{}, open{}, save{};
     Rectangle undo{}, redo{}, mirror{}, grid{}, fit{}, minus{}, plus{}, hex{}, name{}, clear{}, example{}, help{};
-    Rectangle dialog{}, cancel{}, confirm{};
+    Rectangle dialog{}, cancel{}, confirm{}, recovery{};
     Rectangle builtin{}, item{}, reference{}, play{}, framePng{}, apply{}, applied{}, resetFrame{}, compactPreview{};
     std::array<Rectangle,3> slots{},clips{};
     std::array<Rectangle,8> directions{},frames{};
@@ -128,7 +131,11 @@ public:
     std::string name="wayfarer",notice="Your next character starts with a single pixel.";
     float noticeRemaining=5;
     std::uint32_t importSerial=0,applySerial=0;
-    int applyStatus=0;
+    int applyStatus=0,autosaveStatus=3;
+    std::uint32_t autosaveSerial=0;
+    bool recoveryReady() const { return recoveryReady_; }
+    bool recoveryAvailable() const { return recoveryPresent_; }
+    bool autosavePending() const { return autosaveClock_.pending(); }
 
     Editor() { prepare(); fit(); syncTexture(); }
     ~Editor() { if (texture_.id) UnloadTexture(texture_); }
@@ -189,6 +196,7 @@ public:
             layout.paletteY=layout.dock.y+8;
         }
         layout.help={w-60,h-24,48,20};
+        layout.recovery={w-186,h-24,116,20};
         const float dw=std::min(480.0f,w-32),dh=modal==Modal::Help ? 402.0f : 302.0f;
         layout.dialog={(w-dw)*0.5f,(h-dh)*0.5f,dw,dh};
         layout.cancel={layout.dialog.x+28,layout.dialog.y+dh-63,(dw-68)*0.5f,35};
@@ -204,6 +212,7 @@ public:
         pan_={}; prepare();
     }
     void frame() {
+        if (closed) return;
         noticeRemaining=std::max(0.0f,noticeRemaining-std::min(GetFrameTime(),0.1f));
         const int width=GetScreenWidth(),height=GetScreenHeight();
         if (width!=lastWidth_ || height!=lastHeight_) {
@@ -213,7 +222,7 @@ public:
 #ifndef __EMSCRIPTEN__
         const bool control=IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RIGHT_CONTROL)||IsKeyDown(KEY_LEFT_SUPER)||IsKeyDown(KEY_RIGHT_SUPER);
         const bool shift=IsKeyDown(KEY_LEFT_SHIFT)||IsKeyDown(KEY_RIGHT_SHIFT);
-        constexpr std::array<int,28> keys{{KEY_A,KEY_B,KEY_E,KEY_F,KEY_I,KEY_L,KEY_R,KEY_G,KEY_M,KEY_H,KEY_F1,KEY_N,KEY_O,KEY_S,
+        constexpr std::array<int,29> keys{{KEY_A,KEY_B,KEY_E,KEY_F,KEY_I,KEY_L,KEY_R,KEY_G,KEY_M,KEY_H,KEY_F1,KEY_F2,KEY_N,KEY_O,KEY_S,
             KEY_Z,KEY_Y,KEY_ZERO,KEY_EQUAL,KEY_MINUS,KEY_DELETE,KEY_BACKSPACE,KEY_ENTER,KEY_ESCAPE,KEY_ONE,KEY_TWO,KEY_THREE,KEY_FOUR,KEY_FIVE}};
         for (int key : keys) if (IsKeyPressed(key)) queueKey(key,control,shift);
         spaceDown=IsKeyDown(KEY_SPACE);
@@ -260,6 +269,8 @@ public:
             if (wheel!=0) changeZoom(wheel>0?1:-1,GetMousePosition());
         }
         if (equipmentMode) equipment.sync();
+        observeRecovery(); autosaveClock_.advance(std::min(GetFrameTime(),0.1f));
+        flushRecovery(false);
         if (equipmentMode && playing && modal==Modal::None) previewSeconds_+=std::min(GetFrameTime(),0.1f);
         syncTexture(); prepare();
         SetMouseCursor(inside(GetMousePosition(),layout.workspace) && modal==Modal::None ?
@@ -267,7 +278,64 @@ public:
         draw();
     }
     void requestClose() { requestLeave(); }
-    void loseFocus() { finishStroke(); panning_=false; spaceDown=false; pointerEdges_.clear(); keyEdges_.clear(); }
+    void loseFocus() { finishStroke(); panning_=false; spaceDown=false; pointerEdges_.clear(); keyEdges_.clear(); flushRecovery(true); }
+    void loadRecovery() {
+        recoveryReady_=false; storageFailed_=false; autosaveStatus=3;
+#ifdef __EMSCRIPTEN__
+        EM_ASM({ Module.snapshotStore.load(); },0);
+#else
+        const auto stored=save::LocalStore{}.read(save::Slot::Editor,save::MaxDraftBytes);
+        if (!stored.error.empty()) recoveryStatus(stored.found?-3:-1);
+        else if (!stored.found) recoveryStatus(0);
+        else receiveRecovery(stored.bytes.data(),stored.bytes.size());
+#endif
+    }
+    void receiveRecovery(const unsigned char* bytes,std::size_t size) {
+        std::string error;
+        pendingRecovery_=save::decodeDraft(bytes,size,error);
+        recoveryReady_=true; recoveryPresent_=true; hadDraft_=true;
+        autosaveStatus=pendingRecovery_?4:-3;
+        if (!dirty() && modal==Modal::None) modal=Modal::Recovery;
+        notify(pendingRecovery_?"Recovery draft found. Recover or discard it before autosave resumes.":error);
+    }
+    void recoveryStatus(int status) {
+        autosaveStatus=status;
+        if (status==0) { recoveryReady_=true; recoveryPresent_=false; hadDraft_=false; pendingRecovery_.reset(); if (dirty()) autosaveClock_.changed(); }
+        else if (status==-3) receiveRecovery(nullptr,0);
+        else if (status<0) {
+            recoveryReady_=true; storageFailed_=true;
+            notify(status==-4?"Another editor owns recovery. Export here, or close that tab and press F2 to retry.":
+                "Recovery storage unavailable. Export your file; F2 retries storage without losing your artwork.");
+        }
+    }
+    void flushRecovery(bool force) {
+        observeRecovery();
+        if (!recoveryReady_ || recoveryPresent_ || storageFailed_ || !autosaveClock_.pending() || (!force && !autosaveClock_.due())) return;
+        std::string error;
+        snapshot::Bytes bytes;
+        if (dirty()) {
+            save::Draft draft;
+            draft.equipment=equipmentMode; draft.name=name;
+            draft.foreground=foreground; draft.grid=grid; draft.mirror=mirror; draft.references=references; draft.playing=playing;
+            if (equipmentMode) {
+                draft.key=equipment.key(); draft.project=equipment.project();
+                // Checkpoint an in-flight pencil stroke without splitting the
+                // live undo transaction or marking any frame/project saved.
+                draft.project.set(draft.key,art::pixels(document().bitmap()));
+            } else draft.image=document().bitmap();
+            bytes=save::encodeDraft(draft,error);
+            if (bytes.empty()) { storageFailed_=true; autosaveStatus=-3; notify(error); return; }
+        } else if (!hadDraft_) { autosaveClock_.sent(); return; }
+        autosaveClock_.sent(); hadDraft_=!bytes.empty(); autosaveStatus=3; ++autosaveSerial;
+#ifdef __EMSCRIPTEN__
+        if (bytes.empty()) EM_ASM({ Module.snapshotStore.clear(); },0);
+        else writeSnapshotInBrowser(bytes.data(),static_cast<int>(bytes.size()));
+#else
+        const save::LocalStore store;
+        const bool ok=bytes.empty()?store.clear(save::Slot::Editor,error):store.write(save::Slot::Editor,bytes,error);
+        recoveryStatus(ok?(bytes.empty()?2:1):-2);
+#endif
+    }
     void importPng(const unsigned char* bytes,std::size_t size) {
         ++importSerial; finishStroke();
         int width=0,height=0;
@@ -306,6 +374,56 @@ public:
         return pose;
     }
 private:
+    save::AutosaveClock autosaveClock_;
+    bool recoveryReady_=false,recoveryPresent_=false,hadDraft_=false,storageFailed_=false;
+    std::optional<save::Draft> pendingRecovery_;
+    std::string recoveryObserved_;
+    void observeRecovery() {
+        const auto key=equipment.key();
+        std::string identity=name+":"+std::to_string(document().stamp())+":"+std::to_string(foreground.rgba());
+        for (bool value:{equipmentMode,dirty(),grid,mirror,references,playing}) identity+=value?'1':'0';
+        if (equipmentMode) {
+            for (int value:{static_cast<int>(key.slot),key.variant,static_cast<int>(key.pose.clip),static_cast<int>(key.pose.direction),key.pose.frame})
+                identity+=":"+std::to_string(value);
+        }
+        if (identity==recoveryObserved_) return;
+        recoveryObserved_=std::move(identity);
+        if (dirty() || hadDraft_) autosaveClock_.changed();
+    }
+    void requestRecovery() {
+        finishStroke(); commitText();
+        if (recoveryPresent_) { modal=Modal::Recovery; return; }
+        if (!recoveryReady_) { notify("Checking recovery storage..."); return; }
+        flushRecovery(true); loadRecovery();
+    }
+    void discardRecovery() {
+        pendingRecovery_.reset(); recoveryPresent_=false; hadDraft_=false; storageFailed_=false; recoveryReady_=true;
+        modal=Modal::None; autosaveStatus=3; ++autosaveSerial;
+#ifdef __EMSCRIPTEN__
+        EM_ASM({ Module.snapshotStore.clear(); },0);
+#else
+        std::string error; recoveryStatus(save::LocalStore{}.clear(save::Slot::Editor,error)?2:-2);
+#endif
+        recoveryObserved_.clear(); autosaveClock_.changed();
+        notify("Stored recovery discarded. Current artwork is unchanged.");
+    }
+    void recover() {
+        if (!pendingRecovery_) { notify("This recovery draft is unreadable. Keep your current work or discard the stored draft."); return; }
+        auto& draft=*pendingRecovery_;
+        if (draft.equipment) {
+            if (!gearSprites_.load() || !gearSprites_.apply(draft.project)) { notify("Recovery preview could not load. Draft and current artwork kept."); return; }
+            equipment.recover(std::move(draft.project),draft.key); equipmentMode=true;
+            standalone.replace(example()); referenceGear_=Equipment{}; updateReference();
+        } else {
+            standalone.recover(std::move(draft.image)); equipmentMode=false;
+            gearSprites_.clearCustom(); equipment.open(art::Project{});
+        }
+        name=draft.name; foreground=draft.foreground; grid=draft.grid; mirror=draft.mirror; references=draft.references; playing=draft.playing;
+        hexFocus_=nameFocus_=false; textureStamp_=0; previewSeconds_=0;
+        pendingRecovery_.reset(); recoveryPresent_=false; storageFailed_=false;
+        modal=Modal::None; recoveryObserved_.clear(); autosaveClock_.changed(); fit();
+        notify("Draft recovered. Export PNG or SAVE GEAR for a real save point. Undo history starts here.");
+    }
     Texture2D texture_{};
     character::Sprites gearSprites_;
     Equipment referenceGear_;
@@ -436,7 +554,7 @@ private:
         if (!SaveFileData(path.c_str(),bytes.data(),static_cast<int>(bytes.size()))) { notify("Could not save the equipment project."); return; }
         notify("Saved "+path+". Drop it into the game to apply.");
 #endif
-        equipment.markSaved(); modal=Modal::None;
+        equipment.markSaved(); modal=Modal::None; flushRecovery(true);
     }
     void apply() {
         finishStroke(); commitText(); equipment.sync();
@@ -478,6 +596,7 @@ private:
     }
     void setColor(Pixel value) { foreground=value; notify(hex(value)+" selected"); }
     void pointerDown(const PointerEdge& edge) {
+        if (closed) return;
         const Vector2 p=edge.position;
         if (modal!=Modal::None) { if (edge.button==0) modalClick(p); return; }
         if (edge.button==0 && inside(p,layout.hex)) { finishStroke(); hexFocus_=true; nameFocus_=false; input_=hex(foreground); selectText_=true; return; }
@@ -498,6 +617,7 @@ private:
             if (layout.workspace.width>540 && inside(p,layout.minus)) { changeZoom(-1,{layout.workspace.x+layout.workspace.width*0.5f,layout.workspace.y+layout.workspace.height*0.5f}); return; }
             if (layout.workspace.width>540 && inside(p,layout.plus)) { changeZoom(1,{layout.workspace.x+layout.workspace.width*0.5f,layout.workspace.y+layout.workspace.height*0.5f}); return; }
             if (inside(p,layout.help)) { modal=Modal::Help; return; }
+            if (inside(p,layout.recovery)) { requestRecovery(); return; }
             if (inside(p,layout.clear)) { finishStroke(); document().clear(); return; }
             if (inside(p,layout.example)) {
                 if (equipmentMode) { finishStroke(); equipment.resetFrame(); return; }
@@ -546,6 +666,7 @@ private:
         if (input_.size()<(hexFocus_?9u:28u)) input_+=static_cast<char>(c);
     }
     void handleKey(KeyEdge key) {
+        if (closed) return;
         if (hexFocus_ || nameFocus_) {
             if (key.key==KEY_ESCAPE) { hexFocus_=nameFocus_=false; }
             else if (key.key==KEY_ENTER) commitText();
@@ -554,7 +675,10 @@ private:
             return;
         }
         if (modal!=Modal::None) {
-            if (key.key==KEY_ESCAPE) { modal=Modal::None; pendingImport_.reset(); pendingProject_.reset(); }
+            if (key.key==KEY_ESCAPE) {
+                if (modal==Modal::Recovery) notify("Recovery deferred. F2 opens it again; autosave waits for your choice.");
+                modal=Modal::None; pendingImport_.reset(); pendingProject_.reset();
+            }
             else if (key.key==KEY_ENTER) modalClick({layout.confirm.x+2,layout.confirm.y+2});
             return;
         }
@@ -572,6 +696,7 @@ private:
             case KEY_F: tool=Tool::Fill; break; case KEY_I: tool=Tool::Picker; break;
             case KEY_L: tool=Tool::Line; break; case KEY_R: tool=Tool::Rectangle; break;
             case KEY_G: grid=!grid; break; case KEY_M: mirror=!mirror; break;
+            case KEY_F2: requestRecovery(); break;
             case KEY_H: case KEY_F1: modal=Modal::Help; break; case KEY_ZERO: fit(); break;
             case KEY_EQUAL: changeZoom(1,{layout.workspace.x+layout.workspace.width*0.5f,layout.workspace.y+layout.workspace.height*0.5f}); break;
             case KEY_MINUS: changeZoom(-1,{layout.workspace.x+layout.workspace.width*0.5f,layout.workspace.y+layout.workspace.height*0.5f}); break;
@@ -579,10 +704,12 @@ private:
             default: if (key.key>=KEY_ONE && key.key<=KEY_FIVE) setColor(Palette[static_cast<std::size_t>(key.key-KEY_ONE+8)]); break;
         }
     }
-    void requestLeave() { finishStroke(); if (dirty()) modal=Modal::Leave; else leave(); }
+    void requestLeave() { finishStroke(); flushRecovery(true); if (dirty()) modal=Modal::Leave; else leave(); }
     void leave() {
+        flushRecovery(true);
 #ifdef __EMSCRIPTEN__
-        EM_ASM({ Module.allowEditorExit=true; window.location.href='index.html'; },0);
+        closed=true;
+        EM_ASM({ Module.snapshotStore.leave(); },0);
 #else
         closed=true;
 #endif
@@ -636,16 +763,18 @@ private:
         notify("Saved "+path);
 #endif
         if (!equipmentMode) document().markSaved();
-        modal=Modal::None;
+        modal=Modal::None; flushRecovery(true);
     }
     void modalClick(Vector2 p) {
+        if (inside(p,layout.cancel) && modal==Modal::Recovery) { discardRecovery(); return; }
         if (inside(p,layout.cancel)) { modal=Modal::None; pendingImport_.reset(); pendingProject_.reset(); return; }
         if (modal==Modal::New) {
             constexpr std::array<int,4> sizes{{16,32,64,128}};
             for (std::size_t i=0;i<sizes.size();++i) if (inside(p,layout.sizes[i])) newSize_=sizes[i];
         }
         if (!inside(p,layout.confirm)) return;
-        if (modal==Modal::New) load(Bitmap{newSize_,newSize_},"untitled");
+        if (modal==Modal::Recovery) recover();
+        else if (modal==Modal::New) load(Bitmap{newSize_,newSize_},"untitled");
         else if (modal==Modal::Import && pendingImport_) {
             if (equipmentMode) { document().paste(std::move(*pendingImport_)); pendingImport_.reset(); modal=Modal::None; }
             else load(std::move(*pendingImport_),"imported");
@@ -786,6 +915,7 @@ private:
         else if (modal==Modal::Builtin) title="OPEN BUILT-IN EQUIPMENT?";
         else if (modal==Modal::ProjectImport) title="OPEN EQUIPMENT PROJECT?";
         else if (modal==Modal::OpenHint) title="OPEN PNG / EQUIPMENT PROJECT";
+        else if (modal==Modal::Recovery) title="RECOVER EDITOR DRAFT?";
         text("ASHFALL / SPRITE WORKSHOP",r.x+28,r.y+28,9,Gold); text(title,r.x+28,r.y+58,20,Ink);
         if (modal==Modal::New) {
             text("Choose a canvas. Start with transparent pixels.",r.x+28,r.y+99,11,Muted);
@@ -804,6 +934,11 @@ private:
                 "G  Grid       M  Mirror     0  Fit canvas", "Ctrl/Cmd Z  Undo       Shift Z / Y  Redo",
                 "Ctrl/Cmd N  New    O  Open    S  Export", "Wheel / +/-  Zoom    Space + drag  Pan", "Right drag  Erase    Alt-click  Pick color"}};
             for (std::size_t i=0;i<rows.size();++i) text(rows[i],r.x+28,r.y+106+static_cast<float>(i)*28,11,Muted);
+        } else if (modal==Modal::Recovery) {
+            text(pendingRecovery_?pendingRecovery_->name.c_str():"Unreadable recovery draft",r.x+28,r.y+110,14,Gold);
+            text(pendingRecovery_?"Restores pixels and all edited gear frames.":"Corrupt, oversized or unsupported recovery data.",r.x+28,r.y+141,11,Muted);
+            text(dirty()?"Recovery replaces current unexported work. Export first.":"Recovered work stays unexported. Undo history starts fresh.",r.x+28,r.y+169,10,Muted);
+            text("Esc: decide later. Autosave waits for your choice.",r.x+28,r.y+197,10,Teal);
         } else if (modal==Modal::OpenHint) {
             text("Drop a PNG or .ashgear file onto this window.",r.x+28,r.y+112,12,Ink);
             text("PNG: 1-128 px. Gear frame PNG: exactly 96 x 96.",r.x+28,r.y+145,10,Muted);
@@ -813,9 +948,9 @@ private:
             text(modal==Modal::Import?(equipmentMode?"Replaces only this frame. Undo is available.":"Importing replaces the canvas and clears undo history."):
                  (modal==Modal::Overwrite?"Replace the file with your current artwork?":"Save a PNG or .ashgear project before replacing it."),r.x+28,r.y+153,10,Muted);
         }
-        button(layout.cancel,modal==Modal::Help || modal==Modal::OpenHint ? "CLOSE":"KEEP EDITING");
-        const char* confirm=modal==Modal::New?"CREATE SPRITE":(modal==Modal::Import?(equipmentMode?"REPLACE FRAME":"IMPORT PNG"):
-            (modal==Modal::Leave?"LEAVE":(modal==Modal::Overwrite?"REPLACE FILE":((modal==Modal::Builtin || modal==Modal::ProjectImport)?"OPEN GEAR":"GOT IT"))));
+        button(layout.cancel,modal==Modal::Recovery?"DISCARD DRAFT":(modal==Modal::Help || modal==Modal::OpenHint ? "CLOSE":"KEEP EDITING"));
+        const char* confirm=modal==Modal::Recovery?"RECOVER DRAFT":(modal==Modal::New?"CREATE SPRITE":(modal==Modal::Import?(equipmentMode?"REPLACE FRAME":"IMPORT PNG"):
+            (modal==Modal::Leave?"LEAVE":(modal==Modal::Overwrite?"REPLACE FILE":((modal==Modal::Builtin || modal==Modal::ProjectImport)?"OPEN GEAR":"GOT IT")))));
         button(layout.confirm,confirm,false,false,true);
     }
     void drawCompactPreview() const {
@@ -904,7 +1039,8 @@ private:
         char dimensions[44]; std::snprintf(dimensions,sizeof(dimensions),"%d x %d PX  /  RGBA",document().bitmap().width,document().bitmap().height);
         text(dimensions,200,footer+10,9,Muted);
         if (GetScreenWidth()>=1240 && noticeRemaining>0) text(notice.c_str(),390,footer+10,9,Teal);
-        button(layout.help,"? HELP");
+        const char* recoveryLabel=recoveryPresent_?"RECOVER [F2]":(storageFailed_?"RETRY [F2]":(autosaveStatus==1 && !autosaveClock_.pending()?"DRAFT SAVED":"AUTOSAVE [F2]"));
+        button(layout.recovery,recoveryLabel,recoveryPresent_); button(layout.help,"? HELP");
         if (hexFocus_ && layout.inspector.width==0) {
             const Rectangle field{76,static_cast<float>(GetScreenHeight())-146,194,40};
             DrawRectangleRec(field,Raised); DrawRectangleLinesEx(field,1,Gold);
@@ -931,7 +1067,7 @@ namespace {
 std::unique_ptr<ashfall::sprite::Editor> editor;
 void editorFrame() { editor->frame(); }
 #ifdef __EMSCRIPTEN__
-std::vector<unsigned char> importBytes;
+std::vector<unsigned char> importBytes,snapshotBytes;
 EM_BOOL mouseEdge(int event,const EmscriptenMouseEvent* mouse,void*) {
     if (editor) editor->queuePointer(mouse->button,event==EMSCRIPTEN_EVENT_MOUSEDOWN,
         {static_cast<float>(mouse->targetX),static_cast<float>(mouse->targetY)},mouse->altKey);
@@ -939,6 +1075,7 @@ EM_BOOL mouseEdge(int event,const EmscriptenMouseEvent* mouse,void*) {
 }
 int keyCode(const EmscriptenKeyboardEvent& event) {
     if (std::strcmp(event.code,"F1")==0) return KEY_F1;
+    if (std::strcmp(event.code,"F2")==0) return KEY_F2;
     if (std::strcmp(event.code,"Escape")==0) return KEY_ESCAPE;
     if (std::strcmp(event.code,"Enter")==0 || std::strcmp(event.code,"NumpadEnter")==0) return KEY_ENTER;
     if (std::strcmp(event.code,"Backspace")==0) return KEY_BACKSPACE;
@@ -969,6 +1106,16 @@ EM_BOOL blurred(int,const EmscriptenFocusEvent*,void*) { if (editor) editor->los
 
 #ifdef __EMSCRIPTEN__
 extern "C" {
+EMSCRIPTEN_KEEPALIVE unsigned char* ashfall_snapshot_buffer(int size) {
+    if (size<=0 || static_cast<std::size_t>(size)>ashfall::save::MaxDraftBytes) return nullptr;
+    snapshotBytes.resize(static_cast<std::size_t>(size)); return snapshotBytes.data();
+}
+EMSCRIPTEN_KEEPALIVE void ashfall_snapshot_receive(int size) {
+    if (editor && size>0 && static_cast<std::size_t>(size)==snapshotBytes.size()) editor->receiveRecovery(snapshotBytes.data(),snapshotBytes.size());
+    std::vector<unsigned char>().swap(snapshotBytes);
+}
+EMSCRIPTEN_KEEPALIVE void ashfall_snapshot_status(int status) { if (editor) editor->recoveryStatus(status); }
+EMSCRIPTEN_KEEPALIVE void ashfall_snapshot_flush() { if (editor) editor->loseFocus(); }
 EMSCRIPTEN_KEEPALIVE unsigned char* ashfall_editor_import_buffer(int size) {
     if (size<=0 || static_cast<std::size_t>(size)>ashfall::sprite::MaxImportBytes) return nullptr;
     importBytes.resize(static_cast<std::size_t>(size)); return importBytes.data();
@@ -1001,6 +1148,7 @@ EMSCRIPTEN_KEEPALIVE void ashfall_art_restore() {}
 }
 EM_JS(void,installEditorGuard,(),{
     window.addEventListener('beforeunload',function(event){
+        Module._ashfall_snapshot_flush();
         if(!Module.allowEditorExit && _ashfall_editor_is_dirty()){event.preventDefault();event.returnValue="";}
     });
 });
@@ -1011,7 +1159,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_editor_get_state() {
     static char state[4096];
     const auto& doc=editor->document(); const auto& r=editor->layout;
     std::snprintf(state,sizeof(state),
-        "{\"width\":%d,\"height\":%d,\"dirty\":%s,\"undo\":%zu,\"redo\":%zu,\"stamp\":%llu,\"importSerial\":%u,"
+        "{\"recoveryReady\":%s,\"recoveryAvailable\":%s,\"autosaveStatus\":%d,\"autosavePending\":%s,\"autosaveSerial\":%u,\"width\":%d,\"height\":%d,\"dirty\":%s,\"undo\":%zu,\"redo\":%zu,\"stamp\":%llu,\"importSerial\":%u,"
         "\"foreground\":%u,\"tool\":%d,\"modal\":%d,\"grid\":%s,\"mirror\":%s,\"zoom\":%.2f,"
         "\"canvas\":{\"x\":%.2f,\"y\":%.2f,\"width\":%.2f,\"height\":%.2f},"
         "\"palette\":{\"x\":%.2f,\"y\":%.2f,\"step\":%.2f,\"size\":%.2f,\"cols\":%d},"
@@ -1019,6 +1167,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_editor_get_state() {
         "\"hex\":{\"x\":%.2f,\"y\":%.2f},\"name\":{\"x\":%.2f,\"y\":%.2f},"
         "\"equipment\":%s,\"slot\":%d,\"variant\":%d,\"clip\":%d,\"direction\":%d,\"frame\":%d,\"framesEdited\":%zu,"
         "\"references\":%s,\"playing\":%s,\"previewFrame\":%d,\"previewReady\":%s,\"applySerial\":%u,\"applyStatus\":%d}",
+        editor->recoveryReady()?"true":"false",editor->recoveryAvailable()?"true":"false",editor->autosaveStatus,editor->autosavePending()?"true":"false",editor->autosaveSerial,
         doc.bitmap().width,doc.bitmap().height,editor->dirty()?"true":"false",doc.undoDepth(),doc.redoDepth(),
         static_cast<unsigned long long>(doc.stamp()),editor->importSerial,editor->foreground.rgba(),static_cast<int>(editor->tool),static_cast<int>(editor->modal),
         editor->grid?"true":"false",editor->mirror?"true":"false",static_cast<double>(editor->zoom),
@@ -1046,7 +1195,7 @@ int main() {
     SetExitKey(KEY_NULL); SetTextureFilter(GetFontDefault().texture,TEXTURE_FILTER_POINT);
     editor=std::make_unique<ashfall::sprite::Editor>();
 #ifdef __EMSCRIPTEN__
-    installEquipmentBridge(0); installEditorGuard();
+    installSnapshotBridge(1); installEquipmentBridge(0); installEditorGuard();
     emscripten_set_mousedown_callback("#canvas",nullptr,EM_TRUE,mouseEdge);
     emscripten_set_mouseup_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW,nullptr,EM_TRUE,mouseEdge);
     emscripten_set_keydown_callback("#canvas",nullptr,EM_TRUE,keyEdge);
@@ -1055,7 +1204,7 @@ int main() {
     emscripten_set_blur_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW,nullptr,EM_FALSE,blurred);
     emscripten_set_main_loop(editorFrame,0,EM_TRUE);
 #else
-    SetWindowMinSize(800,640); SetTargetFPS(60);
+    SetWindowMinSize(800,640); SetTargetFPS(60); editor->loadRecovery();
     while (!editor->closed) {
         if (WindowShouldClose()) editor->requestClose();
         if (!IsWindowFocused()) editor->loseFocus();

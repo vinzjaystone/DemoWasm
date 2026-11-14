@@ -7,6 +7,7 @@
 #include <vector>
 
 namespace ashfall {
+namespace save { struct RunCodec; }
 
 enum class EffectKind { Ember, Hit, Heal, Dust };
 struct Particle {
@@ -75,6 +76,7 @@ public:
     std::size_t lastPathVisited = 0;
 
 private:
+    friend struct save::RunCodec;
     Pathfinder pathfinder_;
     std::uint32_t selectedEnemyId_ = 0; // IDs survive vector erasure/reallocation; never store a target pointer.
     TargetAction targetAction_ = TargetAction::None;

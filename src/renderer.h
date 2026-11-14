@@ -13,10 +13,11 @@ struct ViewState {
     bool paused = false;
     bool showGrid = false;
     float zoom = 1.0f;
+    std::string saveMessage;
 };
 enum class UiAction {
     None, ToggleInventory, ToggleHelp, TogglePause, Restart, Fullscreen,
-    CycleHead, CycleArmor, CycleBoots, Heal, Attack, Dash, ZoomIn, ZoomOut, ResetZoom, ImportArt, RestoreArt
+    CycleHead, CycleArmor, CycleBoots, Heal, Attack, Dash, ZoomIn, ZoomOut, ResetZoom, ImportArt, RestoreArt, SaveRun, LoadRun, ExportRun, ImportRun
 };
 struct Layout {
     Rectangle header{};
@@ -32,6 +33,7 @@ struct Layout {
     Rectangle attackButton{}, healButton{}, dashButton{};
     Rectangle zoomIn{}, zoomOut{}, resetZoom{};
     Rectangle modal{}, modalPrimary{}, modalSecondary{};
+    Rectangle saveRun{},loadRun{},exportRun{},importRun{};
     bool sidebarVisible = false;
 };
 

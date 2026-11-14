@@ -31,8 +31,9 @@
 <body>
   <div id="game-root">
     <a id="sprite-editor-link" href="editor.html" aria-label="Open the Sprite Workshop editor">SPRITE EDITOR ↗</a>
+    <input id="run-file" type="file" accept=".ashrun" aria-label="Import a saved game run">
     <input id="equipment-file" type="file" accept=".ashgear" aria-label="Import equipment artwork project">
-    <canvas id="canvas" tabindex="0" aria-label="Ashfall game. Left click ground to move or a monster to chase and auto-attack, right click or Space to attack, Shift to dodge, Q to heal, H for field guide, U to import equipment artwork." oncontextmenu="event.preventDefault()"></canvas>
+    <canvas id="canvas" tabindex="0" aria-label="Ashfall game. Left click ground to move or a monster to chase and auto-attack, right click or Space to attack, Shift to dodge, Q to heal, H for field guide, U to import equipment artwork, K to save your run, L to load the saved run." oncontextmenu="event.preventDefault()"></canvas>
     <div id="loading" role="status" aria-live="polite">
       <div class="mark" aria-hidden="true">♢</div>
       <h1>ASHFALL</h1>

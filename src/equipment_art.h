@@ -58,10 +58,11 @@ public:
     const sprite::Document& document() const { return document_; }
     const Project& project() const { return project_; }
     Key key() const { return key_; }
-    bool dirty() const { return dirty_ || document_.dirty(); }
+    bool dirty() const { return recovered_ || dirty_ || document_.dirty(); }
     void sync();
     bool select(Key key);
     void open(Project project);
+    bool recover(Project project,Key key); // No exported save point until the whole project is saved.
     void markSaved();
     bool rename(const std::string& name);
     void resetFrame();
@@ -69,7 +70,7 @@ private:
     Project project_,saved_;
     Key key_;
     sprite::Document document_;
-    bool dirty_=false;
+    bool dirty_=false,recovered_=false;
     std::uint64_t syncedStamp_=0;
 };
 

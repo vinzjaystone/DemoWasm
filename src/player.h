@@ -5,6 +5,7 @@
 #include <cstdint>
 
 namespace ashfall {
+namespace save { struct RunCodec; }
 
 struct Attack {
     static constexpr float HitStart = 0.075f;
@@ -57,6 +58,7 @@ public:
     int takeDamage(int rawDamage, Vec2 impulse);
     void update(const Grid& grid, float dt);
 private:
+    friend struct save::RunCodec;
     Vec2 dashDirection_{1, 0};
 };
 
