@@ -1,10 +1,14 @@
 #include "renderer.h"
 #include "equipment_browser.h"
+#include "run_save.h"
+#include "snapshot_browser.h"
+#include "local_store.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <cstdio>
 #include <memory>
+#include <utility>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -21,6 +25,8 @@ public:
     std::uint32_t artSerial=0;
     std::string artName="built-in";
     std::uint32_t artHash=0;
+    int saveStatus=0;
+    std::uint32_t saveSerial=0,loadSerial=0,saveEventSerial=0;
     std::uint32_t restartSerial = 0; // Read-only acknowledgement of processed restart inputs.
     std::uint32_t groundSerial = 0; // Acknowledge ground clicks separately from simulation time.
 
@@ -35,8 +41,20 @@ public:
             case UiAction::ToggleInventory: view.inventory = !view.inventory; break;
             case UiAction::ToggleHelp: view.help = !view.help; break;
             case UiAction::TogglePause: view.paused = !view.paused; break;
+            case UiAction::SaveRun: saveRun(false); break;
+            case UiAction::LoadRun: loadRun(); break;
+            case UiAction::ExportRun: saveRun(true); break;
+            case UiAction::ImportRun:
+                view.paused=true;
+#ifdef __EMSCRIPTEN__
+                EM_ASM({ document.getElementById('run-file').click(); },0);
+#else
+                saveMessage("Drop a .ashrun file onto the window, or start with --load <file>.");
+#endif
+                break;
             case UiAction::Restart:
-                world.reset(); ++restartSerial; view.paused = false; view.help = false; accumulator_ = 0;
+                cancelRunRead();
+                world.reset(); saveStatus=0; view.saveMessage.clear(); ++restartSerial; view.paused = false; view.help = false; accumulator_ = 0;
                 aim = world.player.position+world.player.facing;
                 renderer.resetPlayerAnimation(world.player);
                 world.notify("A new descent. The same oath.",3.0f);
@@ -79,6 +97,53 @@ public:
             case UiAction::None: break;
         }
     }
+    void saveMessage(const std::string& message) { view.saveMessage=message; world.notify(message,6); }
+    void saveRun(bool portable) {
+        std::string error;
+        const auto bytes=save::encodeRun(world,error);
+        if (bytes.empty()) { saveStatus=-3; saveMessage(error); return; }
+        saveStatus=3; // Pending, not a success until the storage transaction commits.
+#ifdef __EMSCRIPTEN__
+        if (portable) { downloadSnapshot(bytes.data(),static_cast<int>(bytes.size())); saveStatus=5; saveMessage("Run download started. Keep the .ashrun file."); }
+        else { writeSnapshotInBrowser(bytes.data(),static_cast<int>(bytes.size())); saveMessage("Saving run in this browser..."); }
+#else
+        const save::LocalStore store=portable?save::LocalStore{"build/saves"}:save::LocalStore{};
+        if (store.write(save::Slot::Run,bytes,error)) { saveStatus=1; ++saveSerial; saveMessage("Saved "+store.path(save::Slot::Run).string()); }
+        else { saveStatus=-2; saveMessage(error); }
+#endif
+    }
+    void loadRun() {
+        view.paused=true;
+        saveStatus=3; saveMessage("Loading saved run...");
+#ifdef __EMSCRIPTEN__
+        EM_ASM({ Module.snapshotStore.load(); },0);
+#else
+        const auto stored=save::LocalStore{}.read(save::Slot::Run,save::MaxRunBytes);
+        if (!stored.error.empty()) { saveStatus=-1; saveMessage(stored.error+" Current run kept."); }
+        else if (!stored.found) { saveStatus=0; saveMessage("No saved run yet. Press K to save."); }
+        else restoreRun(stored.bytes.data(),stored.bytes.size());
+#endif
+    }
+    bool restoreRun(const unsigned char* bytes,std::size_t size) {
+        ++saveEventSerial;
+        std::string error; auto staged=save::decodeRun(bytes,size,error);
+        if (!staged) { saveStatus=-3; saveMessage(error); return false; }
+        world=std::move(*staged); ++loadSerial; saveStatus=4;
+        view.paused=true; view.help=false; accumulator_=0;
+        aim=world.player.position+world.player.facing;
+        renderer.resetPlayerAnimation(world.player);
+        renderer.prepare(world,view,0);
+        queuedKeys_.fill(false); leftQueued_=rightQueued_=false;
+        saveMessage("Run loaded. Resume when ready; equipment artwork is unchanged."); return true;
+    }
+    void snapshotStatus(int status) {
+        ++saveEventSerial;
+        saveStatus=status;
+        if (status==1) { ++saveSerial; saveMessage("Run saved in this browser. K overwrites this one slot."); }
+        else if (status==0) saveMessage("No saved run in this browser yet. Press K to save.");
+        else if (status==-3) saveMessage("Invalid or oversized .ashrun save. Current run kept.");
+        else saveMessage("Save storage unavailable. Current run kept; export .ashrun from Pause.");
+    }
     bool importArt(const unsigned char* bytes,std::size_t size) {
         ++artSerial;
         std::string error; auto project=art::decode(bytes,size,error);
@@ -95,6 +160,13 @@ public:
         if (announce) world.notify("Built-in equipment artwork restored. Stats unchanged.",4);
     }
 #ifndef __EMSCRIPTEN__
+    void importRunFile(const char* file) {
+        const auto stored=save::readFile(file,save::MaxRunBytes);
+        if (!stored.error.empty() || !stored.found) {
+            saveStatus=-1; saveMessage("Could not read .ashrun file (128 KiB max). Current run kept."); return;
+        }
+        restoreRun(stored.bytes.data(),stored.bytes.size());
+    }
     void importArtFile(const char* file) {
         const int length=GetFileLength(file);
         if (length<=0 || static_cast<std::size_t>(length)>art::MaxFileBytes) { world.notify("Use a .ashgear file smaller than 50 MiB.",5); return; }
@@ -107,10 +179,17 @@ public:
     // Raylib's held states are retained. Browser press edges are additionally
     // buffered so a down/up pair between RAF callbacks is never lost.
     void queueKey(int key) {
+        // Cancel when the intent arrives, not only at the next RAF: a pending
+        // load must not clear a newly buffered Restart/Save/Load key first.
+        if (key==KEY_R || key==KEY_K || key==KEY_L) cancelRunRead();
         if (key>=0 && key<static_cast<int>(queuedKeys_.size())) queuedKeys_[static_cast<std::size_t>(key)] = true;
     }
     void queueMouse(int button,Vector2 position) {
-        if (button==0) { leftQueued_ = true; leftPosition_ = position; }
+        if (button==0) {
+            const auto command=renderer.hitTest(position,world,view);
+            if (command==UiAction::Restart || command==UiAction::SaveRun || command==UiAction::LoadRun || command==UiAction::ImportRun) cancelRunRead();
+            leftQueued_ = true; leftPosition_ = position;
+        }
         if (button==2) { rightQueued_ = true; rightPosition_ = position; }
     }
     bool pressed(int key) const {
@@ -128,11 +207,16 @@ public:
                 world.player.facing = normalized(aim-world.player.position,world.player.facing);
         }
         if (pressed(KEY_R)) action(UiAction::Restart);
+        if (pressed(KEY_K)) action(UiAction::SaveRun);
+        if (pressed(KEY_L)) action(UiAction::LoadRun);
         if (pressed(KEY_U)) action(UiAction::ImportArt);
 #ifndef __EMSCRIPTEN__
         if (IsFileDropped()) {
             const FilePathList files=LoadDroppedFiles();
-            if (files.count>0) importArtFile(files.paths[0]);
+            if (files.count>0) {
+                if (IsFileExtension(files.paths[0],".ashrun")) importRunFile(files.paths[0]);
+                else importArtFile(files.paths[0]);
+            }
             UnloadDroppedFiles(files);
         }
 #endif
@@ -195,6 +279,11 @@ public:
         leftQueued_ = rightQueued_ = false;
     }
 private:
+    void cancelRunRead() {
+#ifdef __EMSCRIPTEN__
+        EM_ASM({ if(Module.snapshotStore) Module.snapshotStore.cancel(); },0);
+#endif
+    }
     float accumulator_ = 0;
     std::array<bool,512> queuedKeys_{};
     bool leftQueued_ = false, rightQueued_ = false;
@@ -234,8 +323,17 @@ EM_BOOL visibility(int,const EmscriptenVisibilityChangeEvent* event,void*) {
 }
 
 #ifdef __EMSCRIPTEN__
-namespace { std::vector<unsigned char> artImportBytes; }
+namespace { std::vector<unsigned char> artImportBytes,snapshotBytes; }
 extern "C" {
+EMSCRIPTEN_KEEPALIVE unsigned char* ashfall_snapshot_buffer(int size) {
+    if (size<=0 || static_cast<std::size_t>(size)>ashfall::save::MaxRunBytes) return nullptr;
+    snapshotBytes.resize(static_cast<std::size_t>(size)); return snapshotBytes.data();
+}
+EMSCRIPTEN_KEEPALIVE void ashfall_snapshot_receive(int size) {
+    if (app && size>0 && static_cast<std::size_t>(size)==snapshotBytes.size()) app->restoreRun(snapshotBytes.data(),snapshotBytes.size());
+    std::vector<unsigned char>().swap(snapshotBytes);
+}
+EMSCRIPTEN_KEEPALIVE void ashfall_snapshot_status(int status) { if (app) app->snapshotStatus(status); }
 EMSCRIPTEN_KEEPALIVE unsigned char* ashfall_art_import_buffer(int size) {
     if (size<=0 || static_cast<std::size_t>(size)>ashfall::art::MaxFileBytes) return nullptr;
     artImportBytes.resize(static_cast<std::size_t>(size)); return artImportBytes.data();
@@ -269,7 +367,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
     const auto* selected = world.selectedEnemy();
     const auto pose = app->renderer.playerPose();
     const int n = std::snprintf(json,sizeof(json),
-        "{\"artName\":\"%s\",\"artFrames\":%zu,\"artHash\":%u,\"artSerial\":%u,\"health\":%d,\"potions\":%d,\"armor\":%d,\"head\":%d,\"body\":%d,\"boots\":%d,"
+        "{\"saveStatus\":%d,\"saveEventSerial\":%u,\"saveSerial\":%u,\"loadSerial\":%u,\"artName\":\"%s\",\"artFrames\":%zu,\"artHash\":%u,\"artSerial\":%u,\"health\":%d,\"potions\":%d,\"armor\":%d,\"head\":%d,\"body\":%d,\"boots\":%d,"
         "\"x\":%.4f,\"y\":%.4f,\"moving\":%s,\"pathSize\":%zu,\"pathNext\":%zu,\"pathVisited\":%zu,"
         "\"kills\":%d,\"enemies\":%d,\"attack\":%s,"
         "\"dashCooldown\":%.3f,\"paused\":%s,\"help\":%s,\"inventory\":%s,\"grid\":%s,"
@@ -281,7 +379,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
         "\"spriteReady\":%s,\"spriteUploads\":%d,\"spriteClip\":\"%s\",\"spriteDirection\":\"%s\",\"spriteFrame\":%d,"
         "\"spriteWeaponBehind\":%s,\"spriteWalkDistance\":%.6f,\"spriteIdleSeconds\":%.6f,\"previewFrame\":%d,"
         "\"targetHud\":{\"x\":%.2f,\"y\":%.2f,\"width\":%.2f,\"height\":%.2f},\"targets\":[",
-        app->artName.c_str(),app->renderer.customArtFrames(),app->artHash,app->artSerial,player.health,player.potions,player.equipment.armor(),player.equipment.variant(ashfall::EquipmentSlot::Head),
+        app->saveStatus,app->saveEventSerial,app->saveSerial,app->loadSerial,app->artName.c_str(),app->renderer.customArtFrames(),app->artHash,app->artSerial,player.health,player.potions,player.equipment.armor(),player.equipment.variant(ashfall::EquipmentSlot::Head),
         player.equipment.variant(ashfall::EquipmentSlot::Armor),player.equipment.variant(ashfall::EquipmentSlot::Boots),
         static_cast<double>(player.position.x),static_cast<double>(player.position.y),player.navigation.moving()?"true":"false",
         player.navigation.waypoints.size(),player.navigation.next,world.lastPathVisited,
@@ -341,7 +439,7 @@ int main(int argc,char** argv) {
 #endif
     app = std::make_unique<ashfall::Application>();
 #ifdef __EMSCRIPTEN__
-    installEquipmentBridge(1);
+    installSnapshotBridge(0); installEquipmentBridge(1);
     emscripten_set_mousedown_callback("#canvas",nullptr,EM_TRUE,mouseDown);
     emscripten_set_keydown_callback("#canvas",nullptr,EM_TRUE,keyDown);
     emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW,nullptr,EM_FALSE,resize);
@@ -349,6 +447,7 @@ int main(int argc,char** argv) {
     emscripten_set_main_loop(frame,0,EM_TRUE);
 #else
     if (argc==3 && std::strcmp(argv[1],"--art")==0) app->importArtFile(argv[2]);
+    if (argc==3 && std::strcmp(argv[1],"--load")==0) app->importRunFile(argv[2]);
     while (!WindowShouldClose()) frame();
     app.reset();
     CloseWindow();

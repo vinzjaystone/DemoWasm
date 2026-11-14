@@ -188,10 +188,15 @@ void Renderer::prepare(const World& world, const ViewState& view, float frameDt)
     layout_.resetZoom = {sceneWidth-90,h-foot-54,30,30};
     layout_.zoomIn = {sceneWidth-54,h-foot-54,30,30};
     const float modalWidth = std::min(520.0f,w-32);
-    const float modalHeight = view.help ? std::min(470.0f,h-30) : 302.0f;
+    const float modalHeight = view.help ? std::min(470.0f,h-30) : 430.0f;
     layout_.modal = {(w-modalWidth)*0.5f,(h-modalHeight)*0.5f,modalWidth,modalHeight};
     layout_.modalPrimary = {layout_.modal.x+36,layout_.modal.y+modalHeight-71,modalWidth-72,39};
     layout_.modalSecondary = {layout_.modal.x+36,layout_.modal.y+modalHeight-113,modalWidth-72,30};
+    const float saveWidth=(modalWidth-80)*0.5f;
+    layout_.saveRun={layout_.modal.x+36,layout_.modal.y+186,saveWidth,32};
+    layout_.loadRun={layout_.modal.x+44+saveWidth,layout_.modal.y+186,saveWidth,32};
+    layout_.exportRun={layout_.modal.x+36,layout_.modal.y+228,saveWidth,32};
+    layout_.importRun={layout_.modal.x+44+saveWidth,layout_.modal.y+228,saveWidth,32};
     camera_.target = rv(iso_.worldToScreen({10,10}));
     camera_.offset = {sceneWidth*0.5f,head+layout_.scene.height*0.57f};
     camera_.rotation = 0;
@@ -229,6 +234,12 @@ bool Renderer::sceneContains(Vector2 mouse, const World& world, const ViewState&
 }
 UiAction Renderer::hitTest(Vector2 mouse, const World& world, const ViewState& view) const {
     if (view.help || view.paused || !world.player.alive() || world.cleared()) {
+        if (!view.help) {
+            if (inside(mouse,layout_.saveRun)) return UiAction::SaveRun;
+            if (inside(mouse,layout_.loadRun)) return UiAction::LoadRun;
+            if (inside(mouse,layout_.exportRun)) return UiAction::ExportRun;
+            if (inside(mouse,layout_.importRun)) return UiAction::ImportRun;
+        }
         if (inside(mouse,layout_.modalPrimary)) return view.help ? UiAction::ToggleHelp :
             (view.paused && world.player.alive() && !world.cleared() ? UiAction::TogglePause : UiAction::Restart);
         if (view.paused && !view.help && inside(mouse,layout_.modalSecondary)) return UiAction::Restart;
@@ -975,15 +986,17 @@ void Renderer::drawModal(const World& world,const ViewState& view) const {
         centered("A FLAME WORTH KEEPING",cx,r.y+77,18,Ink,1.5f);
         centered("Enter the sanctum. Silence the hollow. Survive.",cx,r.y+108,10,Muted,0.7f);
         struct Row { const char* key; const char* title; const char* detail; };
-        const std::array<Row,6> rows = {{{"LMB","Move / Target","Ground: move. Monster: chase and auto-attack."},
+        const std::array<Row,7> rows = {{{"LMB","Move / Target","Ground: move. Monster: chase and auto-attack."},
             {"RMB / SPACE","Cleave","Manual aim. ASPD sets the 2-3s strike interval."},
             {"SHIFT","Dodge","Dash toward the cursor. Briefly invulnerable."},
             {"Q","Heal","Recover 50 vitality. Three flasks per run."},
             {"1 / 2 / 3","Equip","Cycle head, armor, and boots. Stats are live."},
+            {"K / L","Save / Load","One local run slot. Load pauses; R starts fresh."},
             {"ESC / P","Pause","I: character   U: import gear art   R: restart"}}};
         const float keyWidth = r.width>450?100.0f:82.0f;
+        const float rowStep=std::min(37.0f,(r.height-246)/6);
         for (std::size_t i = 0; i < rows.size(); ++i) {
-            const float y = r.y+146+static_cast<float>(i)*37;
+            const float y = r.y+146+static_cast<float>(i)*rowStep;
             keycap(rows[i].key,r.x+30,y,keyWidth);
             text(rows[i].title,r.x+keyWidth+46,y,11,Ink);
             if (r.width>430) text(rows[i].detail,r.x+keyWidth+46,y+15,8,Muted,0.1f);
@@ -1010,6 +1023,13 @@ void Renderer::drawModal(const World& world,const ViewState& view) const {
         centered("The ruins can wait. Keep your flame.",cx,r.y+118,11,Muted,0.5f);
         button(layout_.modalSecondary,"ABANDON RUN  /  RESTART");
         button(layout_.modalPrimary,"RETURN TO THE SANCTUM",true);
+    }
+    if (!view.help) {
+        button(layout_.saveRun,"SAVE RUN [K]"); button(layout_.loadRun,"LOAD RUN [L]");
+        button(layout_.exportRun,"EXPORT .ASHRUN"); button(layout_.importRun,"IMPORT .ASHRUN");
+        std::string message=view.saveMessage.empty()?"Local save / portable file. Loading replaces this run.":view.saveMessage;
+        while (!message.empty() && textWidth(message.c_str(),10)>r.width-60) message.pop_back();
+        centered(message.c_str(),cx,r.y+280,10,Teal,0.5f);
     }
 }
 

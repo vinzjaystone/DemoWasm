@@ -59,6 +59,7 @@ EM_JS(void,installEquipmentBridge,(int game),{
     };
     async function readFile(file) {
         if (!file) return;
+        if(isGame && file.name.toLowerCase().endsWith('.ashrun') && Module.importRunFile) { await Module.importRunFile(file); return; }
         const request=++epoch;
         try {
             if(!file.size || file.size>maxBytes) {Module._ashfall_art_status(4);return;}
