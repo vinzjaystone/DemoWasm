@@ -100,6 +100,22 @@ try {
   assert.equal(requests.some(url => /\.(png|jpg|jpeg|webp|data)(\?|$)/i.test(url)), false, 'no runtime art or filesystem dependency');
   console.log(`[PASS] ${expected ? 'Five generated RGBA atlases, nearest/clamp filtering' : shaderFailure ? 'Failed shader initialization frees all five textures and uses procedural fallback' : 'Procedural fallback, no atlas uploads'}`);
 
+  if (!expected) {
+    // A legitimate empty project must be rejected honestly, not recorded as
+    // applied when the procedural fallback cannot display equipment overrides.
+    const name = Buffer.from('fallback'), bytes = Buffer.alloc(37 + name.length);
+    bytes.write('ASHGEAR\0', 0, 'ascii'); bytes.writeUInt16LE(1, 8); bytes.writeUInt16LE(1, 10);
+    bytes.writeUInt16LE(96, 12); bytes.writeUInt16LE(48, 14); bytes.writeUInt16LE(76, 16);
+    Buffer.from([8, 4, 8, 6, 3, 3]).copy(bytes, 18); bytes.writeUInt32LE(2166136261, 32);
+    bytes[36] = name.length; name.copy(bytes, 37);
+    const before = await state();
+    await page.locator('#equipment-file').setInputFiles({ name: 'fallback.ashgear', mimeType: 'application/octet-stream', buffer: bytes });
+    const rejected = await until(s => s.artSerial > before.artSerial, 'fallback art rejection');
+    assert.equal(rejected.artFrames, 0); assert.equal(rejected.artName, 'built-in'); assert.equal(rejected.artHash, 0);
+    assert.equal(rejected.spriteReady, false); assert.equal(rejected.armor, before.armor);
+    console.log('[PASS] Disabled/failed sprite renderer rejects artwork application without changing the fallback or stats');
+  }
+
   await restart();
   const directions = [['S',0,1],['SW',-1,1],['W',-1,0],['NW',-1,-1],['N',0,-1],['NE',1,-1],['E',1,0],['SE',1,1]];
   for (const [name, dx, dy] of directions) {

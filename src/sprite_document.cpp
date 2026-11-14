@@ -116,6 +116,11 @@ bool Document::replace(Bitmap bitmap) {
     revision_=nextRevision_++; savedRevision_=revision_; ++stamp_;
     return true;
 }
+bool Document::paste(Bitmap bitmap) {
+    if (!bitmap.valid() || bitmap.width!=bitmap_.width || bitmap.height!=bitmap_.height) return false;
+    commitStroke(); beginStroke(); bitmap_=std::move(bitmap); ++stamp_;
+    return commitStroke();
+}
 void Document::beginStroke() { if (!before_) before_=Snapshot{bitmap_,revision_}; }
 bool Document::commitStroke() {
     if (!before_) return false;

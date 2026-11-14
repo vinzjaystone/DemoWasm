@@ -1,4 +1,5 @@
-#include "sprite_document.h"
+#include "character_visual.h"
+#include "equipment_browser.h"
 #include "raylib.h"
 #include <algorithm>
 #include <array>
@@ -17,7 +18,7 @@
 #include <emscripten/emscripten.h>
 #include <emscripten/html5.h>
 EM_JS(void,downloadSpritePng,(const unsigned char* data,int size,const char* name),{
-    const blob=new Blob([HEAPU8.slice(data,data+size)],{type:'image/png'});
+    const blob=new Blob([HEAPU8.slice(data,data+size)],{type:UTF8ToString(name).endsWith('.png')?'image/png':'application/octet-stream'});
     const url=URL.createObjectURL(blob); const link=document.createElement('a');
     link.href=url; link.download=UTF8ToString(name); document.body.appendChild(link); link.click(); link.remove();
     setTimeout(function(){URL.revokeObjectURL(url);},30000);
@@ -90,11 +91,14 @@ struct OwnedImage {
 }
 
 enum class Tool { Pencil, Eraser, Fill, Picker, Line, Rectangle };
-enum class Modal { None, New, Import, Leave, Help, Overwrite, OpenHint };
+enum class Modal { None, New, Import, Leave, Help, Overwrite, OpenHint, Builtin, ProjectImport };
 struct Layout {
     Rectangle workspace{}, canvas{}, inspector{}, dock{}, back{}, create{}, open{}, save{};
     Rectangle undo{}, redo{}, mirror{}, grid{}, fit{}, minus{}, plus{}, hex{}, name{}, clear{}, example{}, help{};
     Rectangle dialog{}, cancel{}, confirm{};
+    Rectangle builtin{}, item{}, reference{}, play{}, framePng{}, apply{}, applied{}, resetFrame{}, compactPreview{};
+    std::array<Rectangle,3> slots{},clips{};
+    std::array<Rectangle,8> directions{},frames{};
     std::array<Rectangle,6> tools{};
     std::array<Rectangle,4> sizes{};
     float paletteX=0, paletteY=0, paletteStep=34, paletteSize=26;
@@ -109,7 +113,12 @@ struct KeyEdge { int key=0; bool control=false,shift=false; int character=0; };
 
 class Editor {
 public:
-    Document document{example()};
+    Document standalone{example()};
+    art::Workspace equipment;
+    bool equipmentMode=false,references=true,playing=true;
+    Document& document() { return equipmentMode?equipment.document():standalone; }
+    const Document& document() const { return equipmentMode?equipment.document():standalone; }
+    bool dirty() const { return equipmentMode?equipment.dirty():standalone.dirty(); }
     Layout layout;
     Tool tool=Tool::Pencil;
     Modal modal=Modal::None;
@@ -118,7 +127,8 @@ public:
     float zoom=16;
     std::string name="wayfarer",notice="Your next character starts with a single pixel.";
     float noticeRemaining=5;
-    std::uint32_t importSerial=0;
+    std::uint32_t importSerial=0,applySerial=0;
+    int applyStatus=0;
 
     Editor() { prepare(); fit(); syncTexture(); }
     ~Editor() { if (texture_.id) UnloadTexture(texture_); }
@@ -134,14 +144,31 @@ public:
         const float w=static_cast<float>(GetScreenWidth()),h=static_cast<float>(GetScreenHeight());
         const float side=w>=960 && h>=728 ? 280.0f : 0.0f;
         const float dock=side==0 ? 76.0f : 0.0f;
-        layout.workspace={64,124,std::max(80.0f,w-64-side),std::max(80.0f,h-152-dock)};
+        layout.workspace={64,equipmentMode?294.0f:124.0f,std::max(80.0f,w-64-side),std::max(80.0f,h-(equipmentMode?322:152)-dock)};
         layout.inspector=side>0 ? Rectangle{w-side,76,side,h-104} : Rectangle{};
         layout.dock=dock>0 ? Rectangle{64,h-28-dock,w-64,dock} : Rectangle{};
-        layout.canvas={layout.workspace.x+layout.workspace.width*0.5f+pan_.x-static_cast<float>(document.bitmap().width)*zoom*0.5f,
-                       layout.workspace.y+layout.workspace.height*0.5f+pan_.y-static_cast<float>(document.bitmap().height)*zoom*0.5f,
-                       static_cast<float>(document.bitmap().width)*zoom,static_cast<float>(document.bitmap().height)*zoom};
+        layout.canvas={layout.workspace.x+layout.workspace.width*0.5f+pan_.x-static_cast<float>(document().bitmap().width)*zoom*0.5f,
+                       layout.workspace.y+layout.workspace.height*0.5f+pan_.y-static_cast<float>(document().bitmap().height)*zoom*0.5f,
+                       static_cast<float>(document().bitmap().width)*zoom,static_cast<float>(document().bitmap().height)*zoom};
         layout.back={16,20,42,34}; layout.create={w-302,20,64,34};
         layout.open={w-230,20,98,34}; layout.save={w-124,20,108,34};
+        layout.builtin={w>=900?342.0f:210.0f,20,128,34};
+        layout.compactPreview=equipmentMode && side==0 ? Rectangle{w-140,layout.workspace.y+16,124,146}:Rectangle{};
+        const float right=layout.workspace.x+layout.workspace.width-16;
+        for (std::size_t i=0;i<3;++i) {
+            layout.slots[i]={80+static_cast<float>(i)*86,136,80,28};
+            layout.clips[i]={80+static_cast<float>(i)*70,174,64,28};
+        }
+        layout.item={344,136,std::max(100.0f,right-344),28};
+        const float directionStep=(right-304)/8;
+        for (std::size_t i=0;i<8;++i) {
+            layout.directions[i]={304+static_cast<float>(i)*directionStep,174,directionStep-4,28};
+            layout.frames[i]={80+static_cast<float>(i)*34,212,28,28};
+        }
+        layout.reference={374,212,90,28}; layout.play={470,212,72,28};
+        layout.apply={548,212,std::max(90.0f,right-548),28};
+        layout.framePng={80,250,120,28}; layout.applied={208,250,150,28};
+        layout.resetFrame={366,250,132,28};
         layout.undo={80,86,62,28}; layout.redo={148,86,62,28};
         layout.mirror={228,86,70,28}; layout.grid={304,86,54,28}; layout.fit={364,86,46,28};
         layout.minus={layout.workspace.x+layout.workspace.width-128,86,26,28};
@@ -170,8 +197,8 @@ public:
             layout.sizes[i]={layout.dialog.x+28+static_cast<float>(i)*(dw-52)/4,layout.dialog.y+139,(dw-68)/4,43};
     }
     void fit() {
-        const float ideal=std::min((layout.workspace.width-80)/static_cast<float>(document.bitmap().width),
-                                   (layout.workspace.height-80)/static_cast<float>(document.bitmap().height));
+        const float ideal=std::min((layout.workspace.width-80)/static_cast<float>(document().bitmap().width),
+                                   (layout.workspace.height-80)/static_cast<float>(document().bitmap().height));
         zoom=Zooms.front();
         for (float value : Zooms) if (value<=ideal) zoom=value;
         pan_={}; prepare();
@@ -232,6 +259,8 @@ public:
             const float wheel=GetMouseWheelMove();
             if (wheel!=0) changeZoom(wheel>0?1:-1,GetMousePosition());
         }
+        if (equipmentMode) equipment.sync();
+        if (equipmentMode && playing && modal==Modal::None) previewSeconds_+=std::min(GetFrameTime(),0.1f);
         syncTexture(); prepare();
         SetMouseCursor(inside(GetMousePosition(),layout.workspace) && modal==Modal::None ?
             (panning_ || spaceDown ? MOUSE_CURSOR_RESIZE_ALL : MOUSE_CURSOR_CROSSHAIR) : MOUSE_CURSOR_DEFAULT);
@@ -250,11 +279,39 @@ public:
         Bitmap bitmap(width,height);
         static_assert(sizeof(Pixel)==4,"RGBA pixels must be tightly packed");
         std::memcpy(bitmap.pixels.data(),image.value.data,bitmap.pixels.size()*sizeof(Pixel));
-        if (document.dirty()) { pendingImport_=std::move(bitmap); modal=Modal::Import; }
+        if (equipmentMode && (width!=character::CellSize || height!=character::CellSize)) { notify("Equipment frame PNGs must be exactly 96 x 96. Project unchanged."); return; }
+        if (equipmentMode || dirty()) { pendingImport_=std::move(bitmap); modal=Modal::Import; }
         else load(std::move(bitmap),"imported");
+    }
+    void importFileBytes(const unsigned char* bytes,std::size_t size) {
+        if (!art::hasSignature(bytes,size)) { importPng(bytes,size); return; }
+        ++importSerial; finishStroke();
+        std::string error;
+        auto project=art::decode(bytes,size,error);
+        if (!project) { notify(error); return; }
+        if (dirty()) { pendingProject_=std::move(*project); modal=Modal::ProjectImport; }
+        else openProject(std::move(*project));
+    }
+    bool previewReady() const { return gearSprites_.ready(); }
+    character::Pose previewPose() const {
+        auto pose=equipment.key().pose;
+        if (!playing) return pose;
+        if (pose.clip==character::Clip::Idle) pose.frame=character::idleFrame(previewSeconds_);
+        else if (pose.clip==character::Clip::Walk) pose.frame=character::walkFrame(previewSeconds_*2.6);
+        else {
+            Attack attack; attack.duration=0.43f;
+            attack.elapsed=static_cast<float>(std::fmod(previewSeconds_,0.75));
+            pose.frame=character::attackFrame(attack);
+        }
+        return pose;
     }
 private:
     Texture2D texture_{};
+    character::Sprites gearSprites_;
+    Equipment referenceGear_;
+    double previewSeconds_=0;
+    std::optional<art::Project> pendingProject_;
+    bool overwriteProject_=false;
     std::uint64_t textureStamp_=0;
     Vector2 pan_{},panLast_{};
     Point strokeStart_{},lastPixel_{};
@@ -267,14 +324,14 @@ private:
     std::vector<PointerEdge> pointerEdges_;
     std::vector<KeyEdge> keyEdges_;
     Point pixel(Vector2 p) const {
-        const auto& bitmap=document.bitmap();
+        const auto& bitmap=document().bitmap();
         const float x=std::clamp((p.x-layout.canvas.x)/zoom,0.0f,static_cast<float>(bitmap.width-1));
         const float y=std::clamp((p.y-layout.canvas.y)/zoom,0.0f,static_cast<float>(bitmap.height-1));
         return {static_cast<int>(std::floor(x)),static_cast<int>(std::floor(y))};
     }
     void syncTexture() {
-        if (textureStamp_==document.stamp()) return;
-        const auto& bitmap=document.bitmap();
+        if (textureStamp_==document().stamp()) return;
+        const auto& bitmap=document().bitmap();
         if (texture_.width!=bitmap.width || texture_.height!=bitmap.height || !texture_.id) {
             if (texture_.id) UnloadTexture(texture_);
             const Image image{const_cast<Pixel*>(bitmap.pixels.data()),bitmap.width,bitmap.height,1,PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
@@ -282,11 +339,116 @@ private:
             SetTextureFilter(texture_,TEXTURE_FILTER_POINT);
             fit();
         } else UpdateTexture(texture_,bitmap.pixels.data());
-        textureStamp_=document.stamp();
+        if (equipmentMode && gearSprites_.ready()) {
+            bool uploaded=false;
+            if (document().editing()) {
+                const auto frame=art::pixels(document().bitmap());
+                uploaded=gearSprites_.setFrame(equipment.key(),&frame);
+            } else uploaded=gearSprites_.setFrame(equipment.key(),equipment.project().find(equipment.key()));
+            if (!uploaded) {
+                references=false;
+                notify("Preview upload failed; showing raw pixels. Artwork is safe; save the .ashgear project.");
+            }
+        }
+        textureStamp_=document().stamp();
     }
     void load(Bitmap bitmap,const std::string& fileName) {
-        document.replace(std::move(bitmap)); name=fileName; modal=Modal::None; pendingImport_.reset(); fit();
+        equipmentMode=false; gearSprites_.clearCustom(); equipment.open(art::Project{}); textureStamp_=0;
+        document().replace(std::move(bitmap)); name=fileName; modal=Modal::None; pendingImport_.reset(); fit();
         notify("Sprite ready. Paint, experiment, make it yours.");
+    }
+    void requestBuiltin() {
+        finishStroke();
+        if (dirty()) modal=Modal::Builtin;
+        else openProject(art::Project{});
+    }
+    void openProject(art::Project project) {
+        finishStroke();
+        if (!gearSprites_.load() || !gearSprites_.apply(project)) {
+            notify("Equipment preview could not load. Current artwork is unchanged."); return;
+        }
+        equipment.open(std::move(project)); equipmentMode=true;
+        standalone.replace(example()); name=equipment.project().name;
+        referenceGear_=Equipment{}; updateReference();
+        textureStamp_=0; previewSeconds_=0; modal=Modal::None;
+        pendingProject_.reset(); pendingImport_.reset(); fit();
+        notify("Choose slot, item, clip, facing and frame. Only the gear layer is editable.");
+    }
+    void updateReference() {
+        const auto key=equipment.key();
+        while (referenceGear_.variant(key.slot)!=key.variant) referenceGear_.cycle(key.slot);
+    }
+    void select(art::Key key) {
+        finishStroke(); equipment.sync();
+        // Flush the old frame before switching; strokes captured between RAFs
+        // must still be visible when previewing another animation frame.
+        syncTexture();
+        if (key==equipment.key()) return;
+        equipment.select(key); updateReference(); textureStamp_=0; previewSeconds_=0;
+    }
+    bool gearClick(Vector2 p) {
+        auto key=equipment.key();
+        for (std::size_t i=0;i<3;++i) {
+            if (inside(p,layout.slots[i])) {
+                key.slot=static_cast<EquipmentSlot>(i); key.variant=referenceGear_.variant(key.slot); select(key); return true;
+            }
+            if (inside(p,layout.clips[i])) {
+                key.pose.clip=static_cast<character::Clip>(i); key.pose.frame=0; select(key); return true;
+            }
+        }
+        if (inside(p,layout.item)) { key.variant=(key.variant+1)%3; select(key); return true; }
+        for (std::size_t i=0;i<8;++i) {
+            if (inside(p,layout.directions[i])) { key.pose.direction=static_cast<character::Direction>(i); select(key); return true; }
+            if (i<static_cast<std::size_t>(character::clipInfo(key.pose.clip).frames) && inside(p,layout.frames[i])) {
+                key.pose.frame=static_cast<int>(i); select(key); return true;
+            }
+        }
+        if (inside(p,layout.reference)) { references=!references; return true; }
+        if (inside(p,layout.play)) { playing=!playing; previewSeconds_=0; return true; }
+        if (inside(p,layout.framePng)) { exportPng(); return true; }
+        if (inside(p,layout.resetFrame)) { finishStroke(); equipment.resetFrame(); return true; }
+        if (inside(p,layout.apply)) { apply(); return true; }
+        if (inside(p,layout.applied)) {
+#ifdef __EMSCRIPTEN__
+            EM_ASM({ Module.artStore.load(); },0);
+#else
+            modal=Modal::OpenHint;
+#endif
+            return true;
+        }
+        return false;
+    }
+    void save() { if (equipmentMode) exportProject(); else exportPng(); }
+    void exportProject(bool overwrite=false) {
+        finishStroke(); commitText(); equipment.sync();
+        auto bytes=art::encode(equipment.project());
+        if (bytes.empty()) { notify("Project encoding failed. Your artwork is still here."); return; }
+        const std::string file=name+".ashgear";
+#ifdef __EMSCRIPTEN__
+        static_cast<void>(overwrite);
+        downloadSpritePng(bytes.data(),static_cast<int>(bytes.size()),file.c_str());
+        notify("Project download started. All edited frames are included; stats are not.");
+#else
+        std::error_code error; std::filesystem::create_directories("build/sprites",error);
+        if (error) { notify("Could not create build/sprites. Your project is still here."); return; }
+        const std::string path="build/sprites/"+file;
+        if (!overwrite && FileExists(path.c_str())) { overwriteProject_=true; modal=Modal::Overwrite; return; }
+        if (!SaveFileData(path.c_str(),bytes.data(),static_cast<int>(bytes.size()))) { notify("Could not save the equipment project."); return; }
+        notify("Saved "+path+". Drop it into the game to apply.");
+#endif
+        equipment.markSaved(); modal=Modal::None;
+    }
+    void apply() {
+        finishStroke(); commitText(); equipment.sync();
+#ifdef __EMSCRIPTEN__
+        const auto bytes=art::encode(equipment.project());
+        if (bytes.empty()) { notify("Could not encode this project. Artwork unchanged."); return; }
+        applyEquipmentInBrowser(bytes.data(),static_cast<int>(bytes.size()));
+        notify("Applying to this browser's game. Save a .ashgear backup too.");
+#else
+        exportProject();
+#endif
+        // Applying / exporting a single PNG is not a portable project save point.
     }
     void changeZoom(int direction,Vector2 anchor) {
         const float old=zoom;
@@ -296,11 +458,11 @@ private:
         prepare();
         pan_.x+=anchor.x-(layout.canvas.x+px*zoom); pan_.y+=anchor.y-(layout.canvas.y+py*zoom); prepare();
     }
-    void finishStroke() { if (drawing_) { drawing_=false; document.commitStroke(); } }
+    void finishStroke() { if (drawing_) { drawing_=false; document().commitStroke(); } }
     void drag(Vector2 position) {
         if (!drawing_) return;
         const Point next=pixel(position);
-        if (strokeTool_==Tool::Pencil || strokeTool_==Tool::Eraser) document.paintLine(lastPixel_,next,strokeColor_,mirror);
+        if (strokeTool_==Tool::Pencil || strokeTool_==Tool::Eraser) document().paintLine(lastPixel_,next,strokeColor_,mirror);
         lastPixel_=next;
     }
     void pointerUp(const PointerEdge& edge) {
@@ -310,8 +472,8 @@ private:
         }
         if (!drawing_ || (edge.button!=0 && edge.button!=2)) return;
         drag(edge.position);
-        if (strokeTool_==Tool::Line) document.paintLine(strokeStart_,lastPixel_,strokeColor_,mirror);
-        else if (strokeTool_==Tool::Rectangle) document.rectangle(strokeStart_,lastPixel_,strokeColor_,mirror);
+        if (strokeTool_==Tool::Line) document().paintLine(strokeStart_,lastPixel_,strokeColor_,mirror);
+        else if (strokeTool_==Tool::Rectangle) document().rectangle(strokeStart_,lastPixel_,strokeColor_,mirror);
         finishStroke();
     }
     void setColor(Pixel value) { foreground=value; notify(hex(value)+" selected"); }
@@ -322,22 +484,25 @@ private:
         if (edge.button==0 && inside(p,layout.name)) { finishStroke(); nameFocus_=true; hexFocus_=false; input_=name; selectText_=true; return; }
         commitText();
         if (edge.button==0) {
+            if (inside(p,layout.builtin)) { requestBuiltin(); return; }
+            if (equipmentMode && gearClick(p)) return;
             if (inside(p,layout.back)) { requestLeave(); return; }
             if (inside(p,layout.create)) { finishStroke(); modal=Modal::New; return; }
             if (inside(p,layout.open)) { open(); return; }
-            if (inside(p,layout.save)) { exportPng(); return; }
-            if (inside(p,layout.undo)) { finishStroke(); document.undo(); return; }
-            if (inside(p,layout.redo)) { finishStroke(); document.redo(); return; }
+            if (inside(p,layout.save)) { save(); return; }
+            if (inside(p,layout.undo)) { finishStroke(); document().undo(); return; }
+            if (inside(p,layout.redo)) { finishStroke(); document().redo(); return; }
             if (inside(p,layout.grid)) { grid=!grid; return; }
             if (inside(p,layout.mirror)) { mirror=!mirror; return; }
             if (inside(p,layout.fit)) { fit(); return; }
             if (layout.workspace.width>540 && inside(p,layout.minus)) { changeZoom(-1,{layout.workspace.x+layout.workspace.width*0.5f,layout.workspace.y+layout.workspace.height*0.5f}); return; }
             if (layout.workspace.width>540 && inside(p,layout.plus)) { changeZoom(1,{layout.workspace.x+layout.workspace.width*0.5f,layout.workspace.y+layout.workspace.height*0.5f}); return; }
             if (inside(p,layout.help)) { modal=Modal::Help; return; }
-            if (inside(p,layout.clear)) { finishStroke(); document.clear(); return; }
+            if (inside(p,layout.clear)) { finishStroke(); document().clear(); return; }
             if (inside(p,layout.example)) {
+                if (equipmentMode) { finishStroke(); equipment.resetFrame(); return; }
                 finishStroke(); pendingImport_=example();
-                if (document.dirty()) modal=Modal::Import;
+                if (dirty()) modal=Modal::Import;
                 else load(std::move(*pendingImport_),"wayfarer");
                 return;
             }
@@ -347,28 +512,29 @@ private:
                 const float sx=layout.inspector.x+18;
                 for (int i=0;i<3;++i) if (inside(p,{sx+static_cast<float>(i)*84,566,76,30})) {
                     finishStroke();
-                    if (i==0) document.flipHorizontal(); else if (i==1) document.flipVertical(); else document.rotateClockwise();
+                    if (i==0) document().flipHorizontal(); else if (i==1) document().flipVertical(); else document().rotateClockwise();
                     return;
                 }
             }
         }
+        if (inside(p,layout.compactPreview)) return;
         if (!inside(p,layout.workspace)) return;
         if (edge.pan) { finishStroke(); panning_=true; panLast_=p; return; }
         if (!inside(p,layout.canvas)) return;
         const Point at=pixel(p);
-        if (edge.pick || tool==Tool::Picker) { setColor(document.bitmap().at(at)); if (tool==Tool::Picker) tool=Tool::Pencil; return; }
+        if (edge.pick || tool==Tool::Picker) { setColor(document().bitmap().at(at)); if (tool==Tool::Picker) tool=Tool::Pencil; return; }
         if (edge.button!=0 && edge.button!=2) return;
         strokeTool_=edge.button==2 ? Tool::Eraser : tool;
         strokeColor_=strokeTool_==Tool::Eraser ? Transparent : foreground;
-        if (strokeTool_==Tool::Fill) { document.floodFill(at,strokeColor_,mirror); return; }
-        document.beginStroke(); drawing_=true; strokeStart_=lastPixel_=at;
-        if (strokeTool_==Tool::Pencil || strokeTool_==Tool::Eraser) document.paintLine(at,at,strokeColor_,mirror);
+        if (strokeTool_==Tool::Fill) { document().floodFill(at,strokeColor_,mirror); return; }
+        document().beginStroke(); drawing_=true; strokeStart_=lastPixel_=at;
+        if (strokeTool_==Tool::Pencil || strokeTool_==Tool::Eraser) document().paintLine(at,at,strokeColor_,mirror);
     }
     void commitText() {
         if (hexFocus_) {
             const auto parsed=parseHex(input_);
             if (parsed) setColor(*parsed); else notify("Use 6 hex digits, or 8 to include alpha. Color unchanged.");
-        } else if (nameFocus_ && !input_.empty()) name=input_;
+        } else if (nameFocus_ && !input_.empty()) { name=input_; if (equipmentMode) equipment.rename(name); }
         hexFocus_=nameFocus_=selectText_=false;
     }
     void editCharacter(int c) {
@@ -388,15 +554,15 @@ private:
             return;
         }
         if (modal!=Modal::None) {
-            if (key.key==KEY_ESCAPE) { modal=Modal::None; pendingImport_.reset(); }
+            if (key.key==KEY_ESCAPE) { modal=Modal::None; pendingImport_.reset(); pendingProject_.reset(); }
             else if (key.key==KEY_ENTER) modalClick({layout.confirm.x+2,layout.confirm.y+2});
             return;
         }
         finishStroke();
         if (key.control) {
-            if (key.key==KEY_Z) { if (key.shift) document.redo(); else document.undo(); }
-            else if (key.key==KEY_Y) document.redo();
-            else if (key.key==KEY_S) exportPng();
+            if (key.key==KEY_Z) { if (key.shift) document().redo(); else document().undo(); }
+            else if (key.key==KEY_Y) document().redo();
+            else if (key.key==KEY_S) save();
             else if (key.key==KEY_O) open();
             else if (key.key==KEY_N) modal=Modal::New;
             return;
@@ -409,11 +575,11 @@ private:
             case KEY_H: case KEY_F1: modal=Modal::Help; break; case KEY_ZERO: fit(); break;
             case KEY_EQUAL: changeZoom(1,{layout.workspace.x+layout.workspace.width*0.5f,layout.workspace.y+layout.workspace.height*0.5f}); break;
             case KEY_MINUS: changeZoom(-1,{layout.workspace.x+layout.workspace.width*0.5f,layout.workspace.y+layout.workspace.height*0.5f}); break;
-            case KEY_DELETE: document.clear(); break;
+            case KEY_DELETE: document().clear(); break;
             default: if (key.key>=KEY_ONE && key.key<=KEY_FIVE) setColor(Palette[static_cast<std::size_t>(key.key-KEY_ONE+8)]); break;
         }
     }
-    void requestLeave() { finishStroke(); if (document.dirty()) modal=Modal::Leave; else leave(); }
+    void requestLeave() { finishStroke(); if (dirty()) modal=Modal::Leave; else leave(); }
     void leave() {
 #ifdef __EMSCRIPTEN__
         EM_ASM({ Module.allowEditorExit=true; window.location.href='index.html'; },0);
@@ -432,27 +598,32 @@ private:
 #ifndef __EMSCRIPTEN__
     void importFile(const char* file) {
         const int length=GetFileLength(file);
-        if (length<=0 || static_cast<std::size_t>(length)>MaxImportBytes) { notify("PNG files must be smaller than 8 MB."); return; }
+        if (length<=0 || static_cast<std::size_t>(length)>art::MaxFileBytes) { notify("Use a PNG (8 MiB max) or .ashgear project (50 MiB max)."); return; }
         int size=0; unsigned char* data=LoadFileData(file,&size);
-        if (data) importPng(data,static_cast<std::size_t>(std::max(0,size)));
+        if (data) importFileBytes(data,static_cast<std::size_t>(std::max(0,size)));
         else notify("Could not open that PNG.");
         UnloadFileData(data);
     }
 #endif
     void exportPng(bool overwrite=false) {
         finishStroke(); commitText();
-        const std::string file=(name.empty()?"sprite":name)+".png";
+        std::string stem=name.empty()?"sprite":name;
+        if (equipmentMode) {
+            const auto key=equipment.key();
+            stem+="-"+std::to_string(static_cast<int>(key.slot))+"-"+std::to_string(key.variant)+"-"+character::clipInfo(key.pose.clip).name+"-"+character::directionName(key.pose.direction)+"-"+std::to_string(key.pose.frame+1);
+        }
+        const std::string file=stem+".png";
 #ifndef __EMSCRIPTEN__
         const std::filesystem::path directory="build/sprites";
         std::error_code error;
         std::filesystem::create_directories(directory,error);
         if (error) { notify("Could not create build/sprites. Check folder permissions."); return; }
         const std::string path=(directory/file).string();
-        if (!overwrite && FileExists(path.c_str())) { modal=Modal::Overwrite; return; }
+        if (!overwrite && FileExists(path.c_str())) { overwriteProject_=false; modal=Modal::Overwrite; return; }
 #else
         static_cast<void>(overwrite);
 #endif
-        const auto& bitmap=document.bitmap();
+        const auto& bitmap=document().bitmap();
         const Image image{const_cast<Pixel*>(bitmap.pixels.data()),bitmap.width,bitmap.height,1,PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
         int count=0;
         std::unique_ptr<unsigned char,void(*)(void*)> bytes{ExportImageToMemory(image,".png",&count),MemFree};
@@ -464,19 +635,25 @@ private:
         if (!SaveFileData(path.c_str(),bytes.get(),count)) { notify("Could not save the PNG. Your artwork is still here."); return; }
         notify("Saved "+path);
 #endif
-        document.markSaved(); modal=Modal::None;
+        if (!equipmentMode) document().markSaved();
+        modal=Modal::None;
     }
     void modalClick(Vector2 p) {
-        if (inside(p,layout.cancel)) { modal=Modal::None; pendingImport_.reset(); return; }
+        if (inside(p,layout.cancel)) { modal=Modal::None; pendingImport_.reset(); pendingProject_.reset(); return; }
         if (modal==Modal::New) {
             constexpr std::array<int,4> sizes{{16,32,64,128}};
             for (std::size_t i=0;i<sizes.size();++i) if (inside(p,layout.sizes[i])) newSize_=sizes[i];
         }
         if (!inside(p,layout.confirm)) return;
         if (modal==Modal::New) load(Bitmap{newSize_,newSize_},"untitled");
-        else if (modal==Modal::Import && pendingImport_) load(std::move(*pendingImport_),"imported");
+        else if (modal==Modal::Import && pendingImport_) {
+            if (equipmentMode) { document().paste(std::move(*pendingImport_)); pendingImport_.reset(); modal=Modal::None; }
+            else load(std::move(*pendingImport_),"imported");
+        }
+        else if (modal==Modal::Builtin) openProject(art::Project{});
+        else if (modal==Modal::ProjectImport && pendingProject_) openProject(std::move(*pendingProject_));
         else if (modal==Modal::Leave) leave();
-        else if (modal==Modal::Overwrite) exportPng(true);
+        else if (modal==Modal::Overwrite) { if (overwriteProject_) exportProject(true); else exportPng(true); }
         else modal=Modal::None;
     }
     void drawCanvas() const {
@@ -487,23 +664,30 @@ private:
             DrawPixel(static_cast<int>(x),static_cast<int>(y),Color{42,53,57,150});
         DrawRectangleRec({canvas.x+6,canvas.y+6,canvas.width,canvas.height},Color{0,0,0,50});
         checker(canvas,zoom*2);
-        DrawTexturePro(texture_,{0,0,static_cast<float>(texture_.width),static_cast<float>(texture_.height)},canvas,{0,0},0,WHITE);
+        if (equipmentMode && references && gearSprites_.ready())
+            gearSprites_.draw({canvas.x+character::FootX*zoom,canvas.y+character::FootY*zoom},equipment.key().pose,referenceGear_,zoom);
+        else DrawTexturePro(texture_,{0,0,static_cast<float>(texture_.width),static_cast<float>(texture_.height)},canvas,{0,0},0,WHITE);
+        if (equipmentMode) {
+            const Vector2 pivot{canvas.x+character::FootX*zoom,canvas.y+character::FootY*zoom};
+            DrawLineEx({pivot.x-7,pivot.y},{pivot.x+7,pivot.y},1,Teal);
+            DrawLineEx({pivot.x,pivot.y-7},{pivot.x,pivot.y+7},1,Teal);
+        }
         if (grid && zoom>=6) {
-            for (int x=0;x<=document.bitmap().width;++x) {
+            for (int x=0;x<=document().bitmap().width;++x) {
                 const float px=canvas.x+static_cast<float>(x)*zoom;
                 DrawLineEx({px,canvas.y},{px,canvas.y+canvas.height},1,Color{16,23,27,static_cast<unsigned char>(x%8==0?130:70)});
             }
-            for (int y=0;y<=document.bitmap().height;++y) {
+            for (int y=0;y<=document().bitmap().height;++y) {
                 const float py=canvas.y+static_cast<float>(y)*zoom;
                 DrawLineEx({canvas.x,py},{canvas.x+canvas.width,py},1,Color{16,23,27,static_cast<unsigned char>(y%8==0?130:70)});
             }
         }
         DrawRectangleLinesEx(canvas,1,Border);
-        for (int x=0;x<=document.bitmap().width;x+=8) {
+        for (int x=0;x<=document().bitmap().width;x+=8) {
             const std::string label=std::to_string(x);
             text(label.c_str(),canvas.x+static_cast<float>(x)*zoom-3,canvas.y-19,9,Muted);
         }
-        for (int y=0;y<=document.bitmap().height;y+=8) {
+        for (int y=0;y<=document().bitmap().height;y+=8) {
             const std::string label=std::to_string(y);
             text(label.c_str(),canvas.x-25,canvas.y+static_cast<float>(y)*zoom-4,9,Muted);
         }
@@ -512,7 +696,7 @@ private:
                 const Rectangle cell{canvas.x+static_cast<float>(point.x)*zoom,canvas.y+static_cast<float>(point.y)*zoom,zoom,zoom};
                 DrawRectangleRec(cell,fade(color(tint),0.55f)); DrawRectangleLinesEx(cell,1.5f,fade(Ink,0.85f));
                 if (mirror) {
-                    const float mx=canvas.x+static_cast<float>(document.bitmap().width-1-point.x)*zoom;
+                    const float mx=canvas.x+static_cast<float>(document().bitmap().width-1-point.x)*zoom;
                     DrawRectangleLinesEx({mx,cell.y,zoom,zoom},1,fade(Gold,0.6f));
                 }
             };
@@ -550,10 +734,18 @@ private:
         text("LIVE PREVIEW",sx,100,10,Muted);
         text("NEAREST NEIGHBOR",sx+126,101,8,Muted);
         const Rectangle preview{sx,126,244,146}; checker(preview,10);
-        const float scale=std::min(4.0f,std::min((preview.width-20)/static_cast<float>(texture_.width),(preview.height-16)/static_cast<float>(texture_.height)));
-        const float pw=static_cast<float>(texture_.width)*scale,ph=static_cast<float>(texture_.height)*scale;
-        DrawTexturePro(texture_,{0,0,static_cast<float>(texture_.width),static_cast<float>(texture_.height)},
-            {preview.x+(preview.width-pw)*0.5f,preview.y+(preview.height-ph)*0.5f,pw,ph},{0,0},0,WHITE);
+        if (equipmentMode && gearSprites_.ready()) {
+            constexpr float scale=1.35f;
+            gearSprites_.draw({preview.x+preview.width*0.5f,preview.y+character::FootY*scale+7},previewPose(),referenceGear_,scale);
+            const auto pose=previewPose();
+            const std::string label=std::string(character::clipInfo(pose.clip).name)+" / "+character::directionName(pose.direction)+" / "+std::to_string(pose.frame+1);
+            text(label.c_str(),preview.x+8,preview.y+preview.height-13,9,Teal);
+        } else {
+            const float scale=std::min(4.0f,std::min((preview.width-20)/static_cast<float>(texture_.width),(preview.height-16)/static_cast<float>(texture_.height)));
+            const float pw=static_cast<float>(texture_.width)*scale,ph=static_cast<float>(texture_.height)*scale;
+            DrawTexturePro(texture_,{0,0,static_cast<float>(texture_.width),static_cast<float>(texture_.height)},
+                {preview.x+(preview.width-pw)*0.5f,preview.y+(preview.height-ph)*0.5f,pw,ph},{0,0},0,WHITE);
+        }
         DrawRectangleLinesEx(preview,1,Border);
         text("PALETTE",sx,294,10,Muted); text("28 COLORS",sx+181,295,9,Muted); drawPalette();
         text("FOREGROUND / RGBA",sx,462,9,Muted);
@@ -570,13 +762,13 @@ private:
         text("6 HEX DIGITS + OPTIONAL 2-DIGIT ALPHA",sx,526,8,Muted);
         divider(sx,548,244); text("TRANSFORM",sx,550,8,Muted);
         for (int i=0;i<3;++i) button({sx+static_cast<float>(i)*84,566,76,30},i==0?"FLIP H":(i==1?"FLIP V":"ROTATE"));
-        button(layout.clear,"CLEAR"); button(layout.example,"EXAMPLE");
-        text("FILE NAME",sx,648,8,Muted); field(layout.name,nameFocus_?input_:name,nameFocus_);
-        text(".png",sx+210,671,10,Muted);
+        button(layout.clear,"CLEAR"); button(layout.example,equipmentMode?"RESET FRAME":"EXAMPLE");
+        text(equipmentMode?"PROJECT NAME":"FILE NAME",sx,648,8,Muted); field(layout.name,nameFocus_?input_:name,nameFocus_);
+        if (!equipmentMode) text(".png",sx+210,671,10,Muted);
         if (r.height>688) {
-            divider(sx,724,244); text("SMALL CANVAS. BIG POSSIBILITIES.",sx,744,9,Teal);
-            text("PNG exports keep original pixels + alpha.",sx,766,9,Muted);
-            text("No uploads. No external assets required.",sx,783,9,Muted);
+            divider(sx,724,244); text(equipmentMode?"ARTWORK ONLY. STATS UNCHANGED.":"SMALL CANVAS. BIG POSSIBILITIES.",sx,744,9,Teal);
+            text(equipmentMode?"Raw RGB is multiplied by the item tint.":"PNG exports keep original pixels + alpha.",sx,766,9,Muted);
+            text(equipmentMode?"Undo is per frame; switching commits it.":"No uploads. No external assets required.",sx,783,9,Muted);
         }
         EndScissorMode();
     }
@@ -590,8 +782,10 @@ private:
         if (modal==Modal::Import) title="REPLACE UNSAVED WORK?";
         else if (modal==Modal::Leave) title="LEAVE THE WORKSHOP?";
         else if (modal==Modal::Help) title="THE PIXEL PLAYBOOK";
-        else if (modal==Modal::Overwrite) title="REPLACE EXPORTED PNG?";
-        else if (modal==Modal::OpenHint) title="IMPORT A PNG";
+        else if (modal==Modal::Overwrite) title="REPLACE EXPORTED FILE?";
+        else if (modal==Modal::Builtin) title="OPEN BUILT-IN EQUIPMENT?";
+        else if (modal==Modal::ProjectImport) title="OPEN EQUIPMENT PROJECT?";
+        else if (modal==Modal::OpenHint) title="OPEN PNG / EQUIPMENT PROJECT";
         text("ASHFALL / SPRITE WORKSHOP",r.x+28,r.y+28,9,Gold); text(title,r.x+28,r.y+58,20,Ink);
         if (modal==Modal::New) {
             text("Choose a canvas. Start with transparent pixels.",r.x+28,r.y+99,11,Muted);
@@ -600,43 +794,87 @@ private:
                 const std::string label=std::to_string(sizes[i])+" x "+std::to_string(sizes[i]);
                 button(layout.sizes[i],label.c_str(),newSize_==sizes[i]);
             }
-            text(document.dirty()?"Unsaved changes will be discarded. Export them first.":"Small sprites. Sharp edges. Every pixel counts.",r.x+28,r.y+202,10,document.dirty()?Gold:Muted);
+            text(dirty()?"Unsaved work will be discarded. Save your file first.":"Small sprites. Sharp edges. Every pixel counts.",r.x+28,r.y+202,10,dirty()?Gold:Muted);
         } else if (modal==Modal::Help) {
-            constexpr std::array<const char*,7> rows{{"B  Pencil     E  Eraser     F  Flood fill", "I  Picker     L  Line       R  Rectangle",
+            const std::array<const char*,7> rows=equipmentMode?std::array<const char*,7>{{
+                "Slot / item >  Choose a catalog equipment layer", "Clip / facing / number  Choose a single frame",
+                "REFERENCE  Body + gear, multiplied by item tint", "SOLO / RAW  Exact editable pixels, no tint",
+                "Ctrl/Cmd S  Save ALL edits as .ashgear", "FRAME PNG  One raw layer; NOT a project save",
+                "Switching commits edits; undo is per frame"}}:std::array<const char*,7>{{"B  Pencil     E  Eraser     F  Flood fill", "I  Picker     L  Line       R  Rectangle",
                 "G  Grid       M  Mirror     0  Fit canvas", "Ctrl/Cmd Z  Undo       Shift Z / Y  Redo",
                 "Ctrl/Cmd N  New    O  Open    S  Export", "Wheel / +/-  Zoom    Space + drag  Pan", "Right drag  Erase    Alt-click  Pick color"}};
             for (std::size_t i=0;i<rows.size();++i) text(rows[i],r.x+28,r.y+106+static_cast<float>(i)*28,11,Muted);
         } else if (modal==Modal::OpenHint) {
-            text("Drop a PNG file anywhere on this window.",r.x+28,r.y+112,12,Ink);
-            text("1-128 pixels per side. Transparency is preserved.",r.x+28,r.y+145,10,Muted);
-            text("Exports are saved to build/sprites/<name>.png.",r.x+28,r.y+175,10,Muted);
+            text("Drop a PNG or .ashgear file onto this window.",r.x+28,r.y+112,12,Ink);
+            text("PNG: 1-128 px. Gear frame PNG: exactly 96 x 96.",r.x+28,r.y+145,10,Muted);
+            text("Save gear, then drop the .ashgear into the game.",r.x+28,r.y+175,10,Muted);
         } else {
-            text(modal==Modal::Overwrite?"A PNG with this file name already exists.":"You have changes that have not been exported.",r.x+28,r.y+117,12,Muted);
-            text(modal==Modal::Import?"Importing replaces the canvas and clears undo history.":
-                 (modal==Modal::Overwrite?"Replace the file with your current sprite?":"Keep editing to export a PNG before leaving."),r.x+28,r.y+153,10,Muted);
+            text(modal==Modal::Overwrite?"A file with this name already exists.":"Unsaved work is protected, including other frames.",r.x+28,r.y+117,12,Muted);
+            text(modal==Modal::Import?(equipmentMode?"Replaces only this frame. Undo is available.":"Importing replaces the canvas and clears undo history."):
+                 (modal==Modal::Overwrite?"Replace the file with your current artwork?":"Save a PNG or .ashgear project before replacing it."),r.x+28,r.y+153,10,Muted);
         }
         button(layout.cancel,modal==Modal::Help || modal==Modal::OpenHint ? "CLOSE":"KEEP EDITING");
-        const char* confirm=modal==Modal::New?"CREATE SPRITE":(modal==Modal::Import?"IMPORT PNG":
-            (modal==Modal::Leave?"LEAVE":(modal==Modal::Overwrite?"REPLACE PNG":"GOT IT")));
+        const char* confirm=modal==Modal::New?"CREATE SPRITE":(modal==Modal::Import?(equipmentMode?"REPLACE FRAME":"IMPORT PNG"):
+            (modal==Modal::Leave?"LEAVE":(modal==Modal::Overwrite?"REPLACE FILE":((modal==Modal::Builtin || modal==Modal::ProjectImport)?"OPEN GEAR":"GOT IT"))));
         button(layout.confirm,confirm,false,false,true);
     }
+    void drawCompactPreview() const {
+        const auto r=layout.compactPreview;
+        if (r.width<=0 || !gearSprites_.ready()) return;
+        DrawRectangleRec(r,Panel); DrawRectangleLinesEx(r,1,Border);
+        text("GEAR PREVIEW",r.x+10,r.y+10,9,Teal);
+        const Rectangle preview{r.x+8,r.y+28,r.width-16,108}; checker(preview,6);
+        gearSprites_.draw({preview.x+preview.width*0.5f,preview.y+character::FootY+6},previewPose(),referenceGear_,1);
+    }
+    void drawGearControls() const {
+        const float width=layout.workspace.width;
+        DrawRectangleRec({64,124,width,170},Panel); divider(64,293,width);
+        const auto key=equipment.key();
+        constexpr std::array<const char*,3> slots{{"HEAD","ARMOR","BOOTS"}},clips{{"IDLE","WALK","ATTACK"}};
+        for (std::size_t i=0;i<3;++i) {
+            button(layout.slots[i],slots[i],static_cast<std::size_t>(key.slot)==i);
+            button(layout.clips[i],clips[i],static_cast<std::size_t>(key.pose.clip)==i);
+        }
+        const std::string item=std::string(Equipment::piece(key.slot,key.variant).name)+"  >";
+        button(layout.item,item.c_str());
+        for (std::size_t i=0;i<8;++i) {
+            button(layout.directions[i],character::directionName(static_cast<character::Direction>(i)),static_cast<std::size_t>(key.pose.direction)==i);
+            if (i<static_cast<std::size_t>(character::clipInfo(key.pose.clip).frames)) {
+                auto frameKey=key; frameKey.pose.frame=static_cast<int>(i);
+                const std::string label=std::to_string(i+1)+(equipment.project().find(frameKey)?"*":"");
+                button(layout.frames[i],label.c_str(),static_cast<std::size_t>(key.pose.frame)==i);
+            }
+        }
+        button(layout.reference,references?"REFERENCE":"SOLO / RAW",references);
+        button(layout.play,playing?"PAUSE":"ANIMATE",playing);
+#ifdef __EMSCRIPTEN__
+        button(layout.apply,"APPLY TO GAME",false,false,true);
+        button(layout.applied,"OPEN APPLIED GEAR");
+#else
+        button(layout.apply,"SAVE TO APPLY",false,false,true);
+        button(layout.applied,"OPEN GEAR FILE");
+#endif
+        button(layout.framePng,"FRAME PNG"); button(layout.resetFrame,"RESET FRAME");
+        if (width>840) text("96 PX / PIVOT 48,76 / RAW RGBA x ITEM TINT",520,260,9,Muted);
+    }
     void draw() const {
-        BeginDrawing(); ClearBackground(Background); drawCanvas();
+        BeginDrawing(); ClearBackground(Background); drawCanvas(); drawCompactPreview();
         DrawRectangleRec({0,0,static_cast<float>(GetScreenWidth()),76},Panel); divider(0,75,static_cast<float>(GetScreenWidth()));
         button(layout.back,"<");
         text("ASHFALL / TOOLS",80,18,9,Gold);
         text(GetScreenWidth()<900?"Sprites":"Sprite Workshop",80,34,22,Ink);
-        if (GetScreenWidth()>=1120) text("A LITTLE WORKSHOP FOR YOUR NEXT ADVENTURE",342,34,9,Muted);
-        button(layout.create,"NEW"); button(layout.open,"OPEN PNG"); button(layout.save,"EXPORT PNG",false,false,true);
+        button(layout.builtin,equipmentMode?"NEW BUILT-IN":"BUILT-IN GEAR",equipmentMode);
+        button(layout.create,"NEW"); button(layout.open,"OPEN FILE"); button(layout.save,equipmentMode?"SAVE GEAR":"EXPORT PNG",false,false,true);
         DrawRectangleRec({64,76,layout.workspace.width,48},Panel); divider(64,123,layout.workspace.width);
-        button(layout.undo,"UNDO",false,document.undoDepth()==0 && !document.editing());
-        button(layout.redo,"REDO",false,document.redoDepth()==0);
+        button(layout.undo,"UNDO",false,document().undoDepth()==0 && !document().editing());
+        button(layout.redo,"REDO",false,document().redoDepth()==0);
         button(layout.mirror,"MIRROR",mirror); button(layout.grid,"GRID",grid); button(layout.fit,"FIT");
         if (layout.workspace.width>540) {
             button(layout.minus,"-"); button(layout.plus,"+");
             char percent[20]; std::snprintf(percent,sizeof(percent),"%.0f%%",static_cast<double>(zoom*100));
             centered(percent,{layout.minus.x+28,86,64,28},10,Muted);
         }
+        if (equipmentMode) drawGearControls();
         DrawRectangleRec({0,76,64,static_cast<float>(GetScreenHeight()-104)},Panel);
         DrawLineEx({63,76},{63,static_cast<float>(GetScreenHeight()-28)},1,Border);
         constexpr std::array<const char*,6> letters{{"B","E","F","I","L","R"}};
@@ -661,9 +899,9 @@ private:
         drawInspector();
         const float footer=static_cast<float>(GetScreenHeight())-28;
         DrawRectangleRec({0,footer,static_cast<float>(GetScreenWidth()),28},Panel); divider(0,footer,static_cast<float>(GetScreenWidth()));
-        const std::string filename=(document.dirty()?"* ":"")+(nameFocus_?input_:name)+".png";
-        text(filename.c_str(),16,footer+10,10,document.dirty()?Gold:Ink);
-        char dimensions[44]; std::snprintf(dimensions,sizeof(dimensions),"%d x %d PX  /  RGBA",document.bitmap().width,document.bitmap().height);
+        const std::string filename=(dirty()?"* ":"")+(nameFocus_?input_:name)+(equipmentMode?".ashgear":".png");
+        text(filename.c_str(),16,footer+10,10,dirty()?Gold:Ink);
+        char dimensions[44]; std::snprintf(dimensions,sizeof(dimensions),"%d x %d PX  /  RGBA",document().bitmap().width,document().bitmap().height);
         text(dimensions,200,footer+10,9,Muted);
         if (GetScreenWidth()>=1240 && noticeRemaining>0) text(notice.c_str(),390,footer+10,9,Teal);
         button(layout.help,"? HELP");
@@ -740,24 +978,28 @@ EMSCRIPTEN_KEEPALIVE void ashfall_editor_import_png(int size) {
     else if (editor) editor->importPng(nullptr,0);
     importBytes.clear();
 }
-EMSCRIPTEN_KEEPALIVE int ashfall_editor_is_dirty() { return editor && editor->document.dirty(); }
+EMSCRIPTEN_KEEPALIVE int ashfall_editor_is_dirty() { return editor && editor->dirty(); }
+EMSCRIPTEN_KEEPALIVE unsigned char* ashfall_art_import_buffer(int size) {
+    if (size<=0 || static_cast<std::size_t>(size)>ashfall::art::MaxFileBytes) return nullptr;
+    importBytes.resize(static_cast<std::size_t>(size)); return importBytes.data();
 }
-EM_JS(void,installBrowserFiles,(),{
-    const input=document.getElementById('png-file');
-    async function readFile(file){
-        if(!file) return;
-        if(file.size===0 || file.size>8388608){_ashfall_editor_import_png(0);return;}
-        try {
-            const bytes=new Uint8Array(await file.arrayBuffer());
-            const pointer=_ashfall_editor_import_buffer(bytes.length);
-            if(!pointer){_ashfall_editor_import_png(0);return;}
-            HEAPU8.set(bytes,pointer); _ashfall_editor_import_png(bytes.length);
-        } catch(error) {_ashfall_editor_import_png(0);}
-        Module.canvas.focus({preventScroll:true});
-    }
-    input.addEventListener('change',function(){const file=input.files[0];input.value="";readFile(file);});
-    Module.canvas.addEventListener('dragover',function(event){event.preventDefault();});
-    Module.canvas.addEventListener('drop',function(event){event.preventDefault();readFile(event.dataTransfer.files[0]);});
+EMSCRIPTEN_KEEPALIVE int ashfall_art_import_file(int size) {
+    if (!editor || size<=0 || static_cast<std::size_t>(size)!=importBytes.size()) return 0;
+    editor->importFileBytes(importBytes.data(),importBytes.size());
+    std::vector<unsigned char>().swap(importBytes); return 1;
+}
+EMSCRIPTEN_KEEPALIVE void ashfall_art_status(int status) {
+    if (!editor) return;
+    editor->applyStatus=status; ++editor->applySerial;
+    if (status==1) editor->notify("Applied in this browser. Open the game; save .ashgear for a portable backup.");
+    else if (status==2) editor->notify("Browser storage unavailable. Save .ashgear, then import that file in the game.");
+    else if (status==3) editor->notify("No applied equipment in this browser yet. Use OPEN FILE to load .ashgear.");
+    else editor->notify("Could not read that file. PNG max 8 MiB; .ashgear max 50 MiB. Artwork unchanged.");
+}
+// Shared browser I/O only calls this on the game page.
+EMSCRIPTEN_KEEPALIVE void ashfall_art_restore() {}
+}
+EM_JS(void,installEditorGuard,(),{
     window.addEventListener('beforeunload',function(event){
         if(!Module.allowEditorExit && _ashfall_editor_is_dirty()){event.preventDefault();event.returnValue="";}
     });
@@ -767,24 +1009,30 @@ EM_JS(void,installBrowserFiles,(),{
 #if defined(__EMSCRIPTEN__) && defined(ASHFALL_WEB_TEST_API)
 extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_editor_get_state() {
     static char state[4096];
-    const auto& doc=editor->document; const auto& r=editor->layout;
+    const auto& doc=editor->document(); const auto& r=editor->layout;
     std::snprintf(state,sizeof(state),
         "{\"width\":%d,\"height\":%d,\"dirty\":%s,\"undo\":%zu,\"redo\":%zu,\"stamp\":%llu,\"importSerial\":%u,"
         "\"foreground\":%u,\"tool\":%d,\"modal\":%d,\"grid\":%s,\"mirror\":%s,\"zoom\":%.2f,"
         "\"canvas\":{\"x\":%.2f,\"y\":%.2f,\"width\":%.2f,\"height\":%.2f},"
         "\"palette\":{\"x\":%.2f,\"y\":%.2f,\"step\":%.2f,\"size\":%.2f,\"cols\":%d},"
         "\"dialog\":{\"x\":%.2f,\"y\":%.2f},\"confirm\":{\"x\":%.2f,\"y\":%.2f},"
-        "\"hex\":{\"x\":%.2f,\"y\":%.2f},\"name\":{\"x\":%.2f,\"y\":%.2f}}",
-        doc.bitmap().width,doc.bitmap().height,doc.dirty()?"true":"false",doc.undoDepth(),doc.redoDepth(),
+        "\"hex\":{\"x\":%.2f,\"y\":%.2f},\"name\":{\"x\":%.2f,\"y\":%.2f},"
+        "\"equipment\":%s,\"slot\":%d,\"variant\":%d,\"clip\":%d,\"direction\":%d,\"frame\":%d,\"framesEdited\":%zu,"
+        "\"references\":%s,\"playing\":%s,\"previewFrame\":%d,\"previewReady\":%s,\"applySerial\":%u,\"applyStatus\":%d}",
+        doc.bitmap().width,doc.bitmap().height,editor->dirty()?"true":"false",doc.undoDepth(),doc.redoDepth(),
         static_cast<unsigned long long>(doc.stamp()),editor->importSerial,editor->foreground.rgba(),static_cast<int>(editor->tool),static_cast<int>(editor->modal),
         editor->grid?"true":"false",editor->mirror?"true":"false",static_cast<double>(editor->zoom),
         static_cast<double>(r.canvas.x),static_cast<double>(r.canvas.y),static_cast<double>(r.canvas.width),static_cast<double>(r.canvas.height),
         static_cast<double>(r.paletteX),static_cast<double>(r.paletteY),static_cast<double>(r.paletteStep),static_cast<double>(r.paletteSize),r.paletteCols,
         static_cast<double>(r.dialog.x),static_cast<double>(r.dialog.y),static_cast<double>(r.confirm.x),static_cast<double>(r.confirm.y),
-        static_cast<double>(r.hex.x),static_cast<double>(r.hex.y),static_cast<double>(r.name.x),static_cast<double>(r.name.y));
+        static_cast<double>(r.hex.x),static_cast<double>(r.hex.y),static_cast<double>(r.name.x),static_cast<double>(r.name.y),
+        editor->equipmentMode?"true":"false",static_cast<int>(editor->equipment.key().slot),editor->equipment.key().variant,
+        static_cast<int>(editor->equipment.key().pose.clip),static_cast<int>(editor->equipment.key().pose.direction),editor->equipment.key().pose.frame,
+        editor->equipment.project().frames().size(),editor->references?"true":"false",editor->playing?"true":"false",editor->previewPose().frame,
+        editor->previewReady()?"true":"false",editor->applySerial,editor->applyStatus);
     return state;
 }
-extern "C" EMSCRIPTEN_KEEPALIVE unsigned int ashfall_editor_pixel(int x,int y) { return editor->document.bitmap().at({x,y}).rgba(); }
+extern "C" EMSCRIPTEN_KEEPALIVE unsigned int ashfall_editor_pixel(int x,int y) { return editor->document().bitmap().at({x,y}).rgba(); }
 #endif
 
 int main() {
@@ -798,7 +1046,7 @@ int main() {
     SetExitKey(KEY_NULL); SetTextureFilter(GetFontDefault().texture,TEXTURE_FILTER_POINT);
     editor=std::make_unique<ashfall::sprite::Editor>();
 #ifdef __EMSCRIPTEN__
-    installBrowserFiles();
+    installEquipmentBridge(0); installEditorGuard();
     emscripten_set_mousedown_callback("#canvas",nullptr,EM_TRUE,mouseEdge);
     emscripten_set_mouseup_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW,nullptr,EM_TRUE,mouseEdge);
     emscripten_set_keydown_callback("#canvas",nullptr,EM_TRUE,keyEdge);

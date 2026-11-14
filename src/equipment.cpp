@@ -14,9 +14,12 @@ constexpr std::array<std::array<EquipmentPiece, 3>, 3> Catalog = {{
       {"Fleetstriders", "Leave only embers in your wake.", 1, 0.65f, {115, 156, 128}, 2, 0.10f}}}
 }};
 }
+const EquipmentPiece& Equipment::piece(EquipmentSlot slot,int variant) {
+    return Catalog.at(static_cast<std::size_t>(slot)).at(static_cast<std::size_t>(variant));
+}
 const EquipmentPiece& Equipment::get(EquipmentSlot slot) const {
     const std::size_t index = static_cast<std::size_t>(slot);
-    return Catalog.at(index).at(equipped_.at(index));
+    return piece(slot,static_cast<int>(equipped_.at(index)));
 }
 void Equipment::cycle(EquipmentSlot slot) {
     auto& index = equipped_.at(static_cast<std::size_t>(slot));

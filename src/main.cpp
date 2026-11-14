@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "equipment_browser.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -17,6 +18,9 @@ public:
     ViewState view;
     Renderer renderer;
     Vec2 aim{10.5f,12.5f};
+    std::uint32_t artSerial=0;
+    std::string artName="built-in";
+    std::uint32_t artHash=0;
     std::uint32_t restartSerial = 0; // Read-only acknowledgement of processed restart inputs.
     std::uint32_t groundSerial = 0; // Acknowledge ground clicks separately from simulation time.
 
@@ -58,9 +62,48 @@ public:
             case UiAction::ZoomIn: view.zoom = std::min(1.65f,view.zoom+0.1f); break;
             case UiAction::ZoomOut: view.zoom = std::max(0.7f,view.zoom-0.1f); break;
             case UiAction::ResetZoom: view.zoom = 1; break;
+            case UiAction::ImportArt:
+                view.paused=true;
+#ifdef __EMSCRIPTEN__
+                EM_ASM({ document.getElementById('equipment-file').click(); },0);
+#else
+                world.notify("Drop a .ashgear file onto this window to apply equipment artwork.",6);
+#endif
+                break;
+            case UiAction::RestoreArt:
+                restoreArt();
+#ifdef __EMSCRIPTEN__
+                clearEquipmentInBrowser();
+#endif
+                break;
             case UiAction::None: break;
         }
     }
+    bool importArt(const unsigned char* bytes,std::size_t size) {
+        ++artSerial;
+        std::string error; auto project=art::decode(bytes,size,error);
+        if (!project) { world.notify(error,6); return false; }
+        if (!renderer.applyArt(*project)) {
+            world.notify("Equipment sprites unavailable; current artwork kept. Enable sprite rendering to import.",6); return false;
+        }
+        artName=project->name; artHash=2166136261u;
+        for (std::size_t i=0;i<size;++i) { artHash^=bytes[i]; artHash*=16777619u; }
+        world.notify("Applied artwork: "+artName+". Equipment stats are unchanged.",5); return true;
+    }
+    void restoreArt(bool announce=true) {
+        renderer.restoreArt(); artName="built-in"; artHash=0; ++artSerial;
+        if (announce) world.notify("Built-in equipment artwork restored. Stats unchanged.",4);
+    }
+#ifndef __EMSCRIPTEN__
+    void importArtFile(const char* file) {
+        const int length=GetFileLength(file);
+        if (length<=0 || static_cast<std::size_t>(length)>art::MaxFileBytes) { world.notify("Use a .ashgear file smaller than 50 MiB.",5); return; }
+        int size=0; unsigned char* data=LoadFileData(file,&size);
+        if (data) importArt(data,static_cast<std::size_t>(std::max(0,size)));
+        else world.notify("Could not open the equipment project.",5);
+        UnloadFileData(data);
+    }
+#endif
     // Raylib's held states are retained. Browser press edges are additionally
     // buffered so a down/up pair between RAF callbacks is never lost.
     void queueKey(int key) {
@@ -85,6 +128,14 @@ public:
                 world.player.facing = normalized(aim-world.player.position,world.player.facing);
         }
         if (pressed(KEY_R)) action(UiAction::Restart);
+        if (pressed(KEY_U)) action(UiAction::ImportArt);
+#ifndef __EMSCRIPTEN__
+        if (IsFileDropped()) {
+            const FilePathList files=LoadDroppedFiles();
+            if (files.count>0) importArtFile(files.paths[0]);
+            UnloadDroppedFiles(files);
+        }
+#endif
         if (pressed(KEY_I)) action(UiAction::ToggleInventory);
         if (pressed(KEY_H) || pressed(KEY_F1)) action(UiAction::ToggleHelp);
         if (pressed(KEY_F)) action(UiAction::Fullscreen);
@@ -182,6 +233,29 @@ EM_BOOL visibility(int,const EmscriptenVisibilityChangeEvent* event,void*) {
 #endif
 }
 
+#ifdef __EMSCRIPTEN__
+namespace { std::vector<unsigned char> artImportBytes; }
+extern "C" {
+EMSCRIPTEN_KEEPALIVE unsigned char* ashfall_art_import_buffer(int size) {
+    if (size<=0 || static_cast<std::size_t>(size)>ashfall::art::MaxFileBytes) return nullptr;
+    artImportBytes.resize(static_cast<std::size_t>(size)); return artImportBytes.data();
+}
+EMSCRIPTEN_KEEPALIVE int ashfall_art_import_file(int size) {
+    if (!app || size<=0 || static_cast<std::size_t>(size)!=artImportBytes.size()) return 0;
+    const bool accepted=app->importArt(artImportBytes.data(),artImportBytes.size());
+    std::vector<unsigned char>().swap(artImportBytes); return accepted?1:0;
+}
+EMSCRIPTEN_KEEPALIVE void ashfall_art_restore() { if (app) app->restoreArt(app->artName!="built-in"); }
+EMSCRIPTEN_KEEPALIVE void ashfall_art_status(int status) {
+    if (!app) return;
+    if (status==1) app->world.notify("Equipment artwork applied and remembered in this browser. Stats unchanged.",5);
+    else if (status==2) app->world.notify("Browser storage unavailable. Imported art lasts this session; keep your .ashgear file.",6);
+    else if (status==5) app->world.notify("Restored for this session. Browser storage could not be cleared; it may return on reload.",6);
+    else app->world.notify("Could not read equipment art. Use a .ashgear project smaller than 50 MiB.",5);
+}
+}
+#endif
+
 #if defined(__EMSCRIPTEN__) && defined(ASHFALL_WEB_TEST_API)
 // Opt-in, read-only diagnostics for browser integration tests. No test-only game
 // mutations: smoke tests interact through the exact same mouse/keyboard as a user.
@@ -195,7 +269,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
     const auto* selected = world.selectedEnemy();
     const auto pose = app->renderer.playerPose();
     const int n = std::snprintf(json,sizeof(json),
-        "{\"health\":%d,\"potions\":%d,\"armor\":%d,\"head\":%d,\"body\":%d,\"boots\":%d,"
+        "{\"artName\":\"%s\",\"artFrames\":%zu,\"artHash\":%u,\"artSerial\":%u,\"health\":%d,\"potions\":%d,\"armor\":%d,\"head\":%d,\"body\":%d,\"boots\":%d,"
         "\"x\":%.4f,\"y\":%.4f,\"moving\":%s,\"pathSize\":%zu,\"pathNext\":%zu,\"pathVisited\":%zu,"
         "\"kills\":%d,\"enemies\":%d,\"attack\":%s,"
         "\"dashCooldown\":%.3f,\"paused\":%s,\"help\":%s,\"inventory\":%s,\"grid\":%s,"
@@ -207,7 +281,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
         "\"spriteReady\":%s,\"spriteUploads\":%d,\"spriteClip\":\"%s\",\"spriteDirection\":\"%s\",\"spriteFrame\":%d,"
         "\"spriteWeaponBehind\":%s,\"spriteWalkDistance\":%.6f,\"spriteIdleSeconds\":%.6f,\"previewFrame\":%d,"
         "\"targetHud\":{\"x\":%.2f,\"y\":%.2f,\"width\":%.2f,\"height\":%.2f},\"targets\":[",
-        player.health,player.potions,player.equipment.armor(),player.equipment.variant(ashfall::EquipmentSlot::Head),
+        app->artName.c_str(),app->renderer.customArtFrames(),app->artHash,app->artSerial,player.health,player.potions,player.equipment.armor(),player.equipment.variant(ashfall::EquipmentSlot::Head),
         player.equipment.variant(ashfall::EquipmentSlot::Armor),player.equipment.variant(ashfall::EquipmentSlot::Boots),
         static_cast<double>(player.position.x),static_cast<double>(player.position.y),player.navigation.moving()?"true":"false",
         player.navigation.waypoints.size(),player.navigation.next,world.lastPathVisited,
@@ -241,7 +315,10 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* ashfall_get_state() {
 }
 #endif
 
-int main() {
+int main(int argc,char** argv) {
+#ifdef __EMSCRIPTEN__
+    static_cast<void>(argc); static_cast<void>(argv);
+#endif
     SetTraceLogLevel(LOG_WARNING);
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT);
     int width = 1440, height = 900;
@@ -264,12 +341,14 @@ int main() {
 #endif
     app = std::make_unique<ashfall::Application>();
 #ifdef __EMSCRIPTEN__
+    installEquipmentBridge(1);
     emscripten_set_mousedown_callback("#canvas",nullptr,EM_TRUE,mouseDown);
     emscripten_set_keydown_callback("#canvas",nullptr,EM_TRUE,keyDown);
     emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW,nullptr,EM_FALSE,resize);
     emscripten_set_visibilitychange_callback(nullptr,EM_FALSE,visibility);
     emscripten_set_main_loop(frame,0,EM_TRUE);
 #else
+    if (argc==3 && std::strcmp(argv[1],"--art")==0) app->importArtFile(argv[2]);
     while (!WindowShouldClose()) frame();
     app.reset();
     CloseWindow();

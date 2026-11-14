@@ -21,6 +21,7 @@ struct EquipmentPiece {
 class Equipment {
 public:
     static constexpr std::size_t VariantsPerSlot = 3;
+    static const EquipmentPiece& piece(EquipmentSlot slot,int variant);
     const EquipmentPiece& get(EquipmentSlot slot) const;
     void cycle(EquipmentSlot slot);
     int armor() const;

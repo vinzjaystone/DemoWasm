@@ -12,6 +12,7 @@
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #0c1012; }
     #game-root { width: 100%; height: 100%; position: relative; }
     canvas { display: block; width: 100% !important; height: 100% !important; border: 0; outline: none; touch-action: none; }
+    input[type=file] { display: none; }
     #loading { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0c1012; color: #d3ab68; transition: opacity .25s; pointer-events: none; font-family: ui-monospace, monospace; }
     #loading.done { opacity: 0; visibility: hidden; }
     .mark { font-size: 38px; margin-bottom: 24px; }
@@ -30,7 +31,8 @@
 <body>
   <div id="game-root">
     <a id="sprite-editor-link" href="editor.html" aria-label="Open the Sprite Workshop editor">SPRITE EDITOR ↗</a>
-    <canvas id="canvas" tabindex="0" aria-label="Ashfall game. Left click ground to move or a monster to chase and auto-attack, right click or Space to attack, Shift to dodge, Q to heal, H for field guide." oncontextmenu="event.preventDefault()"></canvas>
+    <input id="equipment-file" type="file" accept=".ashgear" aria-label="Import equipment artwork project">
+    <canvas id="canvas" tabindex="0" aria-label="Ashfall game. Left click ground to move or a monster to chase and auto-attack, right click or Space to attack, Shift to dodge, Q to heal, H for field guide, U to import equipment artwork." oncontextmenu="event.preventDefault()"></canvas>
     <div id="loading" role="status" aria-live="polite">
       <div class="mark" aria-hidden="true">♢</div>
       <h1>ASHFALL</h1>
