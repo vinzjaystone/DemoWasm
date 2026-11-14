@@ -40,7 +40,7 @@ jobs:
         run: >-
           c++ -std=c++17 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror
           -Isrc -Ibuild/raylib-api/src -DASHFALL_PLAYER_SPRITES=1
-          -fsyntax-only src/main.cpp src/renderer.cpp src/character_visual.cpp src/character_animation.cpp src/character_sprites.cpp src/sprite_editor.cpp src/sprite_document.cpp
+          -fsyntax-only src/main.cpp src/renderer.cpp src/character_visual.cpp src/character_animation.cpp src/character_sprites.cpp src/sprite_editor.cpp src/sprite_document.cpp src/equipment_art.cpp
 
   desktop:
     name: Native desktop build
@@ -81,6 +81,7 @@ jobs:
           node tests/character_sprite_smoke.mjs
           SPRITE_SHADER_FAILURE=1 node tests/character_sprite_smoke.mjs
           node tests/sprite_editor_smoke.mjs
+          node tests/equipment_art_smoke.mjs
       - name: Exercise the procedural player fallback
         run: |
           emcmake cmake -S . -B build/web -DASHFALL_PLAYER_SPRITES=OFF
@@ -100,7 +101,7 @@ jobs:
         run: |
           emcmake cmake -S . -B build/web -DASHFALL_WEB_TEST_API=OFF -DASHFALL_PLAYER_SPRITES=ON
           cmake --build build/web --parallel 4
-      - name: Verify production startup and PNG export without diagnostics
+      - name: Verify production game/editor PNG and equipment workflow without diagnostics
         run: |
           python3 tools/serve.py --directory build/web --port 8080 &
           SERVER_PID=$!

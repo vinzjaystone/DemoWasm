@@ -45,7 +45,7 @@ Draw order is rear weapon (when facing/sweeping away), body, boots, armor, head,
 
 ## Ownership and fallback
 
-`character::Sprites` is non-copyable and owns the five textures plus the hit-flash shader. It attempts loading only once. A failed texture upload or shader initialization releases partial resources and leaves the original procedural renderer active. Desktop application destruction releases all GPU resources **before** `CloseWindow()`; browser navigation/context destruction releases the browser's resources.
+`character::Sprites` is non-copyable and owns the five textures, hit-flash shader, and any explicitly imported full-cell equipment overrides. Imports stage and validate new textures before replacing old ones; failure releases the staged batch and preserves the old project. Replacing/restoring art also releases its old GPU overrides. It attempts loading only once. A failed texture upload or shader initialization releases partial resources and leaves the original procedural renderer active. Desktop application destruction releases all GPU resources **before** `CloseWindow()`; browser navigation/context destruction releases the browser's resources.
 
 The original renderer can also be selected explicitly, without altering simulation or the Sprite Workshop:
 
@@ -60,10 +60,10 @@ cmake --build build/web --parallel
 
 Set `ASHFALL_PLAYER_SPRITES=ON` to restore sprites (the default on a fresh configure).
 
-## Verification and next steps
+## Verification and equipment editing
 
 `make test` and `make sanitize` include graphics-independent animation/art tests: direction quantization, hysteresis, all clip frames, exact damage markers, distance cadence, pause/reset, all **1,584 layer/frame/direction/variant cells**, alpha/padding/crop bounds, shared registration, eight distinct body silhouettes, all 27 gear combinations, and simulation equivalence with/without animation updates.
 
 With `ASHFALL_WEB_TEST_API=ON`, run `node tests/character_sprite_smoke.mjs` alongside the other browser suites. It drives real input, observes actual WebGL atlas uploads/filtering, checks all directions, gear changes, walking, three consecutive combo swings, independent cooldowns, and pause/help/restart. For a fallback build run `SPRITES_EXPECTED=0 node tests/character_sprite_smoke.mjs`. On a normal sprite build, `SPRITE_SHADER_FAILURE=1 node tests/character_sprite_smoke.mjs` injects an invalid shader at the browser's graphics boundary and verifies all five textures are actually deleted before continuing with the procedural renderer. No gameplay state is mutated by test hooks. Diagnostics remain read-only and are excluded from production builds.
 
-The existing **Sprite Workshop** still edits individual PNGs independently. Timeline authoring, onion skin, editable layers, sheet import/packing/export, and replacing the generated game art are deliberately separate follow-up work—not implied by this first player-rendering milestone.
+**Sprite Workshop** now opens built-in equipment with slot/item/clip/facing/frame selectors, edits full 96px layers against the body/other-gear reference, and previews with this same renderer. Portable `.ashgear` projects and explicit browser/native game imports override only edited equipment cells, without clipping their outer pixels or changing gameplay. See the [equipment workshop guide](equipment-workshop.md). Standalone PNG editing remains supported; arbitrary layer/timeline authoring, onion skin and full-atlas PNG import/export remain separate work.

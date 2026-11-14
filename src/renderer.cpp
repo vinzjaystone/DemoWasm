@@ -172,6 +172,8 @@ void Renderer::prepare(const World& world, const ViewState& view, float frameDt)
     layout_.headSlot = {sx,head+254,side-44,68};
     layout_.armorSlot = {sx,head+330,side-44,68};
     layout_.bootsSlot = {sx,head+406,side-44,68};
+    layout_.artImport = {sx,head+508,(side-52)*0.58f,26};
+    layout_.artRestore = {sx+(side-52)*0.58f+8,head+508,(side-52)*0.42f,26};
     const float abilitiesX = sceneWidth < 760 ? sceneWidth*0.44f : std::max(330.0f,sceneWidth*0.48f);
     layout_.attackButton = {abilitiesX,h-foot+24,52,52};
     layout_.healButton = {abilitiesX+62,h-foot+24,52,52};
@@ -240,6 +242,8 @@ UiAction Renderer::hitTest(Vector2 mouse, const World& world, const ViewState& v
         if (inside(mouse,layout_.headSlot)) return UiAction::CycleHead;
         if (inside(mouse,layout_.armorSlot)) return UiAction::CycleArmor;
         if (inside(mouse,layout_.bootsSlot)) return UiAction::CycleBoots;
+        if (inside(mouse,layout_.artImport)) return UiAction::ImportArt;
+        if (inside(mouse,layout_.artRestore)) return UiAction::RestoreArt;
         if (inside(mouse,layout_.sidebar)) return UiAction::None;
     }
     if (inside(mouse,layout_.attackButton)) return UiAction::Attack;
@@ -902,7 +906,12 @@ void Renderer::drawSidebar(const World& world) const {
     slot(layout_.armorSlot,EquipmentSlot::Armor,1,"ARMOR","2");
     slot(layout_.bootsSlot,EquipmentSlot::Boots,2,"BOOTS","3");
     centered("CLICK A SLOT TO CHANGE EQUIPMENT",centerX,side.y+488,8,Dim,0.7f);
-    horizontal(x,side.y+516,side.width-44);
+    const auto artButton=[&](Rectangle r,const char* title) {
+        DrawRectangleRec(r,inside(GetMousePosition(),r)?Color{37,46,46,255}:Panel);
+        DrawRectangleLinesEx(r,1,Border);
+        centered(title,r.x+r.width*0.5f,r.y+9,8,Gold,0.3f);
+    };
+    artButton(layout_.artImport,"IMPORT ART [U]"); artButton(layout_.artRestore,"RESTORE ART");
     const float statsY = side.y+538;
     const float gap = (side.width-44)/3;
     const std::array<const char*,3> labels = {{"DAMAGE","ARMOR","SPEED"}};
@@ -971,7 +980,7 @@ void Renderer::drawModal(const World& world,const ViewState& view) const {
             {"SHIFT","Dodge","Dash toward the cursor. Briefly invulnerable."},
             {"Q","Heal","Recover 50 vitality. Three flasks per run."},
             {"1 / 2 / 3","Equip","Cycle head, armor, and boots. Stats are live."},
-            {"ESC / P","Pause","I: character   G: grid   R: restart"}}};
+            {"ESC / P","Pause","I: character   U: import gear art   R: restart"}}};
         const float keyWidth = r.width>450?100.0f:82.0f;
         for (std::size_t i = 0; i < rows.size(); ++i) {
             const float y = r.y+146+static_cast<float>(i)*37;

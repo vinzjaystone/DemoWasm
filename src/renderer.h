@@ -16,7 +16,7 @@ struct ViewState {
 };
 enum class UiAction {
     None, ToggleInventory, ToggleHelp, TogglePause, Restart, Fullscreen,
-    CycleHead, CycleArmor, CycleBoots, Heal, Attack, Dash, ZoomIn, ZoomOut, ResetZoom
+    CycleHead, CycleArmor, CycleBoots, Heal, Attack, Dash, ZoomIn, ZoomOut, ResetZoom, ImportArt, RestoreArt
 };
 struct Layout {
     Rectangle header{};
@@ -28,7 +28,7 @@ struct Layout {
     Rectangle helpButton{};
     Rectangle pauseButton{};
     Rectangle fullscreenButton{};
-    Rectangle headSlot{}, armorSlot{}, bootsSlot{};
+    Rectangle headSlot{}, armorSlot{}, bootsSlot{}, artImport{}, artRestore{};
     Rectangle attackButton{}, healButton{}, dashButton{};
     Rectangle zoomIn{}, zoomOut{}, resetZoom{};
     Rectangle modal{}, modalPrimary{}, modalSecondary{};
@@ -44,6 +44,9 @@ public:
     character::Pose previewPose() const { return animator_.preview(); }
     bool spritesReady() const { return sprites_.ready(); }
     int spriteUploads() const { return sprites_.uploads(); }
+    bool applyArt(const art::Project& project) { return sprites_.apply(project); }
+    void restoreArt() { sprites_.clearCustom(); }
+    std::size_t customArtFrames() const { return sprites_.customFrames(); }
     double walkDistance() const { return animator_.walkDistance(); }
     double idleSeconds() const { return animator_.idleSeconds(); }
     void prepare(const World& world, const ViewState& view, float frameDt);

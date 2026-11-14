@@ -1,6 +1,6 @@
 #pragma once
 
-#include "character_sprites.h"
+#include "equipment_art.h"
 #include "raylib.h"
 #include <array>
 
@@ -18,9 +18,14 @@ public:
     bool ready() const { return ready_; }
     int uploads() const { return uploads_; }
     bool draw(Vector2 feet,Pose pose,const Equipment& equipment,float scale,
-              bool flash=false,Color wash=WHITE) const;
+              bool flash=false,Color wash=WHITE,std::uint32_t visible=31) const;
+    bool apply(const art::Project& project); // Atomic replacement; failure preserves current art.
+    bool setFrame(art::Key key,const Frame* pixels); // Editor-only incremental GPU update.
+    void clearCustom();
+    std::size_t customFrames() const { return overrides_.size(); }
 private:
     std::array<Texture2D,LayerCount> textures_{};
+    std::map<art::Key,Texture2D> overrides_;
     Shader flashShader_{};
     int flashLocation_=-1,uploads_=0;
     bool attempted_=false,ready_=false;

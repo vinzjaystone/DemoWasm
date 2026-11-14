@@ -2,7 +2,7 @@
 
 A self-contained isometric hack-and-slash MVP in **C++17 + Raylib 5.5**, built for **desktop and WebAssembly**. Enter a ruined sanctuary, cut down seven hollow and their Ash Warden, and keep your flame alive.
 
-The repository also includes **Sprite Workshop**, a standalone pixel-art editor built with the same C++17/Raylib stack. Open it from the game’s **SPRITE EDITOR** link, or build the native tool with `make editor`.
+The repository also includes **Sprite Workshop**, a pixel-art and equipment editor built with the same C++17/Raylib stack. Open it from the game’s **SPRITE EDITOR** link, or build the native tool with `make editor`.
 
 All game art is procedural: stone tiles, pillars, rubble, braziers, the portal, characters, equipment, attack trails, particles, and interface. The player uses **generated eight-direction spritesheets** with layered equipment; the original shape renderer remains a fallback. The only font is Raylib's embedded default font. **No external artwork, font downloads, asset packs, JavaScript game engine, or runtime art requests are required.**
 
@@ -17,6 +17,7 @@ All game art is procedural: stone tiles, pillars, rubble, braziers, the portal, 
 | **Q** | Drink a flask: +50 vitality, three per run, never wasted at full health |
 | **1 / 2 / 3** | Cycle **Head / Armor / Boots**; also click the equipment cards |
 | **I** | Show/hide the character panel |
+| **U** | Import equipment artwork (`.ashgear`); native: drop the file onto the window |
 | **G** | Toggle the navigation grid |
 | **Mouse wheel / − / +** | Zoom; the middle zoom button restores the fitted view |
 | **Esc / P** | Pause/resume |
@@ -48,7 +49,7 @@ Original starter sheets are generated once from bundled C++ code, uploaded with 
 
 ## Sprite Workshop
 
-A separate tool alongside the game, not a replacement renderer. It starts with a procedural 32 × 32 character you can edit, or a new transparent **16, 32, 64, or 128 px** square canvas.
+A separate tool alongside the game, supporting standalone PNGs and game equipment projects. It starts with a procedural 32 × 32 character you can edit, or a new transparent **16, 32, 64, or 128 px** square canvas.
 
 - **Pencil, eraser, flood fill, color picker, straight line, and outline rectangle.** Fast drags are connected without gaps; one stroke is one undo step.
 - **28-color palette** (including transparent), plus custom **RGB/RGBA hex** (`#RRGGBB` or `#RRGGBBAA`). Alpha is stored exactly, not flattened onto the checkerboard.
@@ -62,18 +63,30 @@ A separate tool alongside the game, not a replacement renderer. It starts with a
 | **B / E / F / I / L / R** | Pencil / eraser / fill / picker / line / rectangle |
 | **Right drag / Alt-click** | Erase / sample a color |
 | **Ctrl/Cmd Z / Shift Z / Y** | Undo / redo (keep Ctrl/Cmd held for redo) |
-| **Ctrl/Cmd N / O / S** | New canvas / open PNG / export PNG |
+| **Ctrl/Cmd N / O / S** | New canvas / open PNG or project / save PNG or whole equipment project |
 | **G / M / 0** | Toggle grid / horizontal mirror / fit |
 | **Wheel / − / +** | Zoom |
 | **Space-drag / middle drag** | Pan without painting |
 | **Delete / H or F1** | Clear (undoable) / help |
 | **Enter / Esc** | Confirm / cancel the active dialog or text field |
 
-**Browser:** use Open PNG or drop a PNG onto the canvas. Export downloads `<name>.png`; files stay local, with no server upload. The back arrow returns to Ashfall. There is no automatic browser persistence—export your work before closing the tab.
+**Browser:** use **OPEN FILE** or drop a PNG/`.ashgear` onto the canvas. Files stay local, with no server upload. The back arrow returns to Ashfall. In-progress editor work is not autosaved—download a PNG or whole project before closing the tab.
 
-**Desktop:** drop a PNG onto the window to import; the Open button explains this workflow without adding a platform-specific file-dialog dependency. Export writes `build/sprites/<name>.png` relative to the working directory. The back arrow or window close asks before discarding unexported work. Run the executable from the repository root for the documented export location.
+**Desktop:** drop a PNG or `.ashgear` onto the window to import; the Open button explains this workflow without adding a platform-specific file-dialog dependency. Export writes `build/sprites/<name>.png` relative to the working directory. The back arrow or window close asks before discarding unexported work. Run the executable from the repository root for the documented export location.
 
-The editor does **not** automatically replace the game’s generated player sheets. Animation timelines, editable layers, sheet import/packing/export, and direct integration remain follow-up work for the tool.
+### Edit and apply equipment
+
+Click **BUILT-IN GEAR → ARMOR → Ashguard plate → WALK → SE → 3**. (The item-name button cycles the three catalog pieces.) Select **Head / Armor / Boots**, any item, any clip/facing/frame, and edit its full **96 × 96** transparent layer. **REFERENCE** shows the body and other gear; **SOLO / RAW** shows exact pixels. The animated preview uses the game's actual catalog tint, fixed foot pivot and front/back weapon order. It remains available in compact layouts.
+
+**SAVE GEAR / Ctrl/Cmd S** saves **all edited frames**, including other items and directions, as a portable **`.ashgear`** project. **FRAME PNG** saves just the current raw layer and does **not** mark the project saved. Switching frames commits their pixels; undo history is bounded to the active frame. Open/import/new/leave guards protect the whole project.
+
+- **Browser:** **APPLY TO GAME** explicitly stores a local IndexedDB snapshot and updates same-origin game tabs; new/reloaded games restore it. **OPEN APPLIED GEAR** reopens that snapshot for further editing. Save a `.ashgear` backup—storage may be unavailable or cleared.
+- **Game:** press **U** / **IMPORT ART [U]** in the character panel, or drop `.ashgear`, to apply a project. **RESTORE ART** returns to the built-ins; restarting a run keeps applied art. Artwork does not change equipment names, stats, loadout, ASPD, damage, simulation or cooldowns.
+- **Native:** save to `build/sprites/<name>.ashgear`, then drop it onto the game, or run `./build/native/ashfall --art build/sprites/<name>.ashgear`. No hidden preferences file is written.
+
+Equipment-mode PNG imports must be **96 × 96** and replace only the selected frame, with confirmation and undo. Project files are validated and bounded to **50 MiB / 1,296 frames**; bad files or failed GPU allocation preserve the current art. New pixels outside the starter's cropped bounds are not clipped. Body/weapon authoring and arbitrary atlas PNG import/export remain outside this equipment workflow.
+
+See the [equipment workshop guide and project format](docs/equipment-workshop.md) for detailed editing, persistence, recovery, native/browser differences and verification.
 
 ## Build requirements
 
@@ -142,7 +155,7 @@ python3 tools/serve.py --directory build/web --port 8080
 
 Serve **all six files together** from `build/web`: `index.html`, `index.js`, `index.wasm`, `editor.html`, `editor.js`, and `editor.wasm`. The relative links between apps also work when hosted in a subdirectory. Do not open the HTML with `file://`. The included server binds to `0.0.0.0`, sends the correct WASM MIME type, and allows iframe previews and arbitrary preview hosts. Static hosting is sufficient; there is no backend. The browser needs WebGL and WebAssembly, not cross-origin isolation or SharedArrayBuffer.
 
-Release output is approximately **400 KiB for the game** and **430 KiB for the editor**, uncompressed (toolchain dependent). Each app starts with 32 MiB of WASM linear memory and allows growth; navigating between them unloads the other app. Threads, Asyncify, asset preloading, and Emscripten's filesystem are not used. Audio is intentionally not part of this MVP.
+Release output is approximately **410 KiB for the game** and **500 KiB for the editor**, uncompressed (toolchain dependent). Each app starts with 32 MiB of WASM linear memory and allows growth; navigating between them unloads the other app. Threads, Asyncify, asset preloading, and Emscripten's filesystem are not used. Audio is intentionally not part of this MVP.
 
 ### Existing/offline Raylib
 
@@ -179,7 +192,7 @@ Coverage includes both gradient API call shapes (without a graphics dependency),
 
 Character tests additionally verify projected facing/hysteresis, idle/walk/attack timing, distance-driven gait, pause/reset, every generated sheet cell and its padding/registration, all 27 equipment combinations, distinct directional bodies, and simulation equivalence with/without animation.
 
-Sprite editor tests additionally cover RGBA/hex handling and bounds, connected lines, stroke transactions, saved revisions, undo/redo branching, mirrored paint, bounded fill, transparency, rectangular transforms, the 64-entry history limit, PNG header/dimension preflight, and the procedural starter. `ASHFALL_BUILD_GAME=OFF` disables **both** graphics applications, keeping all three core suites free of Raylib.
+Sprite editor tests additionally cover RGBA/hex handling and bounds, connected lines, stroke transactions, saved revisions, undo/redo branching, mirrored paint, bounded fill, transparency, rectangular transforms, the 64-entry history limit, PNG header/dimension preflight, and the procedural starter. `ASHFALL_BUILD_GAME=OFF` disables **both** graphics applications, keeping all four core suites free of Raylib. Project tests additionally cover all gear identities, raw/RLE round trips, full-frame registration, save points, frame switching and a malformed-file corpus.
 
 ### Real browser smoke tests (optional)
 
@@ -197,6 +210,7 @@ make serve
 node tests/browser_smoke.mjs
 node tests/character_sprite_smoke.mjs
 node tests/sprite_editor_smoke.mjs
+node tests/equipment_art_smoke.mjs
 ```
 
 This drives real mouse/keyboard inputs, checks gear/ASPD stats, blocked-tile picking, repeated mid-tile route replacement, same-destination/occupied-tile click spam without recentering or waypoint resets, body/feet target picking, a single-click chase and kill at the expected strike interval, live target HP, HUD click-through prevention, cancellation, dodging, pause, guide, restarting, death/removal cleanup, and target-panel layout after canvas resizing. Screenshots go into ignored `build/browser/`. `GAME_URL` overrides the game URL; `EDITOR_URL` overrides the editor URL. `PLAYWRIGHT_MODULE`, `CHROMIUM_EXECUTABLE`, and `CHROMIUM_ARGS` support an existing browser installation.
@@ -205,7 +219,9 @@ The editor test uses real input and the actual C++/WASM app to verify gapless st
 
 The character browser test also observes actual WebGL uploads and nearest/clamp filtering, checks directional body/weapon poses, gear reuse, distance-driven walking, normal/third-combo swing timing, and frozen animation during pause/help. CI verifies shader-failure cleanup with `SPRITE_SHADER_FAILURE=1`, then runs it again with `ASHFALL_PLAYER_SPRITES=OFF` (`SPRITES_EXPECTED=0`) to exercise the explicit procedural fallback.
 
-CI builds both native apps, compiles against actual Raylib 5.5/6.0 headers, runs all three core suites with/without sanitizers and all three browser suites, then rebuilds without diagnostics and runs `node tests/release_smoke.mjs` to verify production startup, PNG export and inter-app navigation. The `ashfall-web` artifact contains both complete apps.
+The equipment browser test verifies real frame painting/tinting, project/PNG export, all catalog selectors, protected imports, live game application, origin-local persistence, unchanged stats, full-cell GPU rendering, partial-allocation failure cleanup, restart/restoration, compact previews and denied storage.
+
+CI builds both native apps, compiles against actual Raylib 5.5/6.0 headers, runs all four core suites with/without sanitizers and all four browser suites, then rebuilds without diagnostics and runs `node tests/release_smoke.mjs` to verify production startup, PNG/project export, application and inter-app navigation. The `ashfall-web` artifact contains both complete apps.
 
 `ASHFALL_WEB_TEST_API` is **off by default**. It adds only a read-only state snapshot for tests; no teleport, invulnerability, damage, or other test-only mutation is exposed. Turn it off for a normal release. `make web` explicitly disables it, including after a diagnostic test build.
 
@@ -222,21 +238,25 @@ src/
   world.h / .cpp           Target selection/chase/auto-combat, AI, damage/death, effects
   character_animation.*    Read-only directional/clip sampling and distance-based visual clock
   character_sprites.*      Graphics-independent starter sheet generation and packing metadata
-  character_visual.*       RAII atlas/shader ownership, tinted equipment layers, anchored quads
+  character_visual.*       RAII atlas/shader/override ownership, tinted equipment, anchored quads
+  equipment_art.*           Graphics-independent equipment project/frame model + validated portable codec
+  equipment_browser.h       Async browser files, IndexedDB and same-origin apply notifications
   renderer.h / .cpp        World art, stable Y-sort, player sprite/fallback, HUD, paper doll, UI
   raylib_compat.h          Compile-time drawing API compatibility (Raylib 5.5/6.0)
   main.cpp                 Raylib input, fixed-step driver, native/web lifecycle
   sprite_document.h / .cpp Graphics-independent RGBA document, tools, history, PNG preflight
   sprite_editor.cpp        Separate Raylib app: editor UI, textures, input, native/web file glue
 web/shell.html             Game loading/fullscreen shell + relative editor link
-web/editor.html            Editor canvas/loading shell + local PNG file input
+web/editor.html            Editor canvas/loading shell + local PNG/project file input
 tests/core_tests.cpp        Native game tests, no third-party test framework
 tests/character_tests.cpp   Native animation/art/registration/equipment tests, no graphics dependency
 tests/sprite_tests.cpp      Native editor-document tests, no graphics dependency
+tests/equipment_art_tests.cpp Native equipment-project/codec/save-point tests, no graphics dependency
 tests/browser_smoke.mjs     Actual-browser game integration checks
 tests/character_sprite_smoke.mjs Player animation, observed GPU uploads and fallback checks
 tests/sprite_editor_smoke.mjs Actual-browser editor/PNG integration checks
-tests/release_smoke.mjs     Production startup/export/navigation without diagnostics
+tests/equipment_art_smoke.mjs Equipment editing/projects/apply/persistence/GPU integration
+tests/release_smoke.mjs     Production PNG/project/export/apply/navigation without diagnostics
 tests/png_helpers.mjs       Small PNG fixtures/reader used only by browser tests
 tools/serve.py             Preview-safe static server; optional --page editor.html
 ```

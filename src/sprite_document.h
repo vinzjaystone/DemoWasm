@@ -53,6 +53,7 @@ public:
     bool dirty() const;
     void markSaved();
     bool replace(Bitmap bitmap); // Fresh document; clears history and the dirty flag.
+    bool paste(Bitmap bitmap); // Same-sized pixel replacement as one undoable edit.
 
     // A drag is one transaction, irrespective of the number of sampled points.
     // Out-of-bounds points are ignored; the UI clips captured drags to the edge.

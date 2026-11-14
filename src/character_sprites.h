@@ -12,7 +12,11 @@ namespace ashfall::character {
 constexpr int CellSize = 96;
 constexpr int FootX = 48, FootY = 76;
 constexpr int FrameColumns = 18; // 4 idle + 8 walk + 6 attack
-struct Pixel { std::uint8_t r=0,g=0,b=0,a=0; };
+struct Pixel {
+    std::uint8_t r=0,g=0,b=0,a=0;
+    bool operator==(Pixel other) const { return r==other.r && g==other.g && b==other.b && a==other.a; }
+    bool operator!=(Pixel other) const { return !(*this==other); }
+};
 static_assert(sizeof(Pixel)==4,"The atlas is tightly packed RGBA8");
 using Frame = std::array<Pixel,CellSize*CellSize>;
 enum class Layer : std::uint8_t { Base, Boots, Armor, Head, Weapon, Count };
