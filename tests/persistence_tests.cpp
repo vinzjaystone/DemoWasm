@@ -110,7 +110,7 @@ void hostileRuns() {
     for (std::size_t i=0;i<original.size();++i) {
         auto bad=original; bad[i]^=128; CHECK(!decodeRun(bad.data(),bad.size(),error));
     }
-    for (auto mutation:{std::pair<std::size_t,std::uint32_t>{20,2}, {24,0}, {28,0x7fc00000u}, {32,0x7f800000u},
+    for (auto mutation:{std::pair<std::size_t,std::uint32_t>{20,3}, {24,0}, {28,0x7fc00000u}, {32,0x7f800000u},
                         {36,99}, {40,0}, {44,0}, {52,999}, {56,99}, {64,99}, {72,0x7f800000u},
                         {104,0xffffffffu}, {108,1}, {115,121}, {119,4}, {185,0xffffffffu},
                         {189,0}, {193,8}, {197,9}, {253,151}, {278,1}}) {

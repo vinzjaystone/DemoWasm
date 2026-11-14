@@ -1,6 +1,7 @@
 // Verify both production entry points work with all test diagnostics removed.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { decodePng } from './png_helpers.mjs';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const browser = await chromium.launch({
@@ -44,6 +45,7 @@ try {
   await page.goto(process.env.GAME_URL || 'http://127.0.0.1:8080/index.html', { waitUntil: 'networkidle' });
   await page.waitForFunction(() => document.querySelector('#loading').classList.contains('done'));
   assert.equal(await page.evaluate(() => typeof Module._ashfall_get_state), 'undefined');
+  assert.equal(await page.evaluate(() => typeof Module._ashfall_get_loot_state), 'undefined');
   assert.equal(await page.locator('#canvas').evaluate(e => !!e.getContext('webgl')), true);
   await page.getByRole('link', { name: 'Open the Sprite Workshop editor' }).click();
   await page.waitForURL('**/editor.html');
@@ -115,6 +117,43 @@ try {
   assert.equal(run.suggestedFilename(), 'run.ashrun');
   assert.deepEqual(await readFile(await run.path()), savedRun);
   assert.equal(await page.evaluate(() => window.__gearUploads), 2, 'loading gameplay does not re-upload or remove applied artwork');
+  // Inventory and post-victory loot also work without the diagnostic APIs.
+  // Observe only the existing storage completion callback, never mutate a World.
+  await page.evaluate(() => {
+    window.__runWrites = 0;
+    const status = Module._ashfall_snapshot_status;
+    Module._ashfall_snapshot_status = function (code) { status(code); if (code === 1) ++window.__runWrites; };
+  });
+  async function importFixture(name) {
+    const received = await page.evaluate(() => window.__runReceived);
+    const choose = page.waitForEvent('filechooser'); await nextFrames(); await page.mouse.click(850, 479);
+    await (await choose).setFiles(resolve('tests/fixtures', name));
+    await page.waitForFunction(before => window.__runReceived === before + 1, received); await nextFrames();
+  }
+  async function saveInventory() {
+    const writes = await page.evaluate(() => window.__runWrites);
+    await page.keyboard.press('k'); await page.waitForFunction(before => window.__runWrites === before + 1, writes);
+    return Buffer.from(await waitRecord('run', true));
+  }
+  await importFixture('legacy-run-v1.ashrun');
+  await page.keyboard.press('b'); await nextFrames();
+  assert.equal(await page.locator('#sprite-editor-link').isVisible(), false);
+  await page.mouse.click(360, 212); await nextFrames(); // Select the worn crown.
+  await page.mouse.click(978, 638); await nextFrames(); // Unequip to the empty bag.
+  const inventorySave = await saveInventory();
+  assert.equal(inventorySave.readUInt32LE(20), 2, 'saving migrates a v1 run to v2');
+  assert.equal(inventorySave.readUInt32LE(104), 0, 'known fixture has no player waypoints');
+  assert.deepEqual([...inventorySave.subarray(112, 115)], [255, 2, 2], 'production unequip records an empty head slot');
+  assert.equal(inventorySave.readUInt32LE(127), 30, 'moving gear is not a currency transaction');
+  await page.keyboard.press('b'); await nextFrames();
+  await importFixture('victory-loot-v2.ashrun');
+  await page.mouse.click(720, 613); await nextFrames(); // Collect the spoils, not Restart.
+  await page.keyboard.press('e'); await nextFrames();
+  const spoils = await saveInventory();
+  assert.equal(spoils.readUInt32LE(104), 0);
+  assert.equal(spoils.readUInt32LE(127), 45, 'production victory pickup grants the Warden ember cache');
+  assert.equal(await page.evaluate(() => window.__gearUploads), 2, 'inventory and loot do not re-upload applied artwork');
+  assert.equal(await page.evaluate(() => typeof Module._ashfall_get_loot_state), 'undefined');
   await page.getByRole('link', { name: 'Open the Sprite Workshop editor' }).click();
   await page.waitForURL('**/editor.html');
   await page.waitForFunction(() => typeof Module._ashfall_editor_is_dirty === 'function' && !!Module.snapshotStore);
@@ -140,7 +179,7 @@ try {
   await waitRecord('editor', false);
   assert.equal(await page.evaluate(() => typeof Module._ashfall_editor_get_state), 'undefined');
   assert.deepEqual(errors, []);
-  console.log('[PASS] Production PNG/project export, Apply/import/GPU overrides, gameplay save/load/export and automatic draft recovery; diagnostics absent');
+  console.log('[PASS] Production PNG/project export, Apply/import/GPU overrides, gameplay save/load/export, owned inventory/victory loot and automatic draft recovery; diagnostics absent');
 } catch (error) {
   console.error(error);
   process.exitCode = 1;

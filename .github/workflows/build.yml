@@ -40,7 +40,7 @@ jobs:
         run: >-
           c++ -std=c++17 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror
           -Isrc -Ibuild/raylib-api/src -DASHFALL_PLAYER_SPRITES=1
-          -fsyntax-only src/main.cpp src/renderer.cpp src/character_visual.cpp src/character_animation.cpp src/character_sprites.cpp src/sprite_editor.cpp src/sprite_document.cpp src/equipment_art.cpp src/run_save.cpp src/editor_recovery.cpp src/local_store.cpp
+          -fsyntax-only src/main.cpp src/renderer.cpp src/inventory_ui.cpp src/equipment.cpp src/loot.cpp src/world_loot.cpp src/character_visual.cpp src/character_animation.cpp src/character_sprites.cpp src/sprite_editor.cpp src/sprite_document.cpp src/equipment_art.cpp src/run_save.cpp src/editor_recovery.cpp src/local_store.cpp
 
   desktop:
     name: Native desktop build
@@ -83,6 +83,7 @@ jobs:
           node tests/sprite_editor_smoke.mjs
           node tests/equipment_art_smoke.mjs
           node tests/persistence_smoke.mjs
+          node tests/loot_smoke.mjs
       - name: Exercise the procedural player fallback
         run: |
           emcmake cmake -S . -B build/web -DASHFALL_PLAYER_SPRITES=OFF
@@ -91,6 +92,7 @@ jobs:
           SERVER_PID=$!
           trap 'kill "$SERVER_PID"' EXIT
           SPRITES_EXPECTED=0 node tests/character_sprite_smoke.mjs
+          LOOT_INVENTORY_ONLY=1 node tests/loot_smoke.mjs
       - name: Save screenshots
         if: always()
         uses: actions/upload-artifact@v4

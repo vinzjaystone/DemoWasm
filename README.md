@@ -14,13 +14,16 @@ All game art is procedural: stone tiles, pillars, rubble, braziers, the portal, 
 | **Left click** monster | Select, chase into melee range, then automatically attack until it dies |
 | **Right click / Space** | Manual cleave toward the cursor; hold to repeat at the same attack-speed cadence |
 | **Shift** | Dash toward the cursor, with brief invulnerability; 2.4 s cooldown |
-| **Q** | Drink a flask: +50 vitality, three per run, never wasted at full health |
-| **1 / 2 / 3** | Cycle **Head / Armor / Boots**; also click the equipment cards |
+| **Q** | Drink a flask: +50 vitality, carry up to three; refill through drops or crafting |
+| **1 / 2 / 3** | Swap **owned** Head / Armor / Boots spares; also click the equipment cards |
+| **B** | Backpack: compare, equip/unequip, drop, confirm salvage, sort or craft flasks; pauses play |
+| **Left click** loot / **E** | Walk to and collect a drop / collect reachable nearby drops |
+| **Alt** (hold) | Show all ground-drop names |
 | **I** | Show/hide the character panel |
 | **U** | Import equipment artwork (`.ashgear`); native: drop the file onto the window |
 | **G** | Toggle the navigation grid |
 | **Mouse wheel / − / +** | Zoom; the middle zoom button restores the fitted view |
-| **Esc / P** | Pause/resume |
+| **Esc / P** | Close the backpack first, otherwise pause/resume |
 | **H / F1** | Open/close the field guide |
 | **F** | Toggle fullscreen (browser fullscreen requires a user gesture) |
 | **K / L** | Save / load one local run slot; a loaded run is paused |
@@ -30,7 +33,7 @@ The hollow pursue within aggro range and telegraph their melee sector in red. St
 
 ### Save and resume
 
-Press **K** to save your run and **L** to load it. The **Pause**, death and victory dialogs also offer save/load and portable **`.ashrun` export/import**. Saves retain progression, equipment, positions, enemies, navigation/target intent and in-flight attack/dash/cooldown state. Loading validates the whole snapshot before replacing the run, then pauses it; missing/corrupt/incompatible files leave the current run intact. A fresh launch does not automatically load a save, and Restart never overwrites it.
+Press **K** to save your run and **L** to load it. The **Pause**, death and victory dialogs also offer save/load and portable **`.ashrun` export/import**. Saves retain progression, owned/rolled equipment, exact backpack cells, ground loot, RNG, positions, enemies, navigation/target intent and in-flight attack/dash/cooldown state. Original v1 saves migrate without duplicate rewards or free items. Loading validates the whole snapshot before replacing the run, then pauses it; missing/corrupt/incompatible files leave the current run intact. A fresh launch does not automatically load a save, and Restart never overwrites it.
 
 Browser quick saves use local **IndexedDB**, not a server. Native quick saves use the OS user-data directory (or **`ASHFALL_DATA_DIR`**). Native portable export writes `build/saves/run.ashrun`; import by drag/drop or `./build/native/ashfall --load /path/to/run.ashrun`. Run files never replace equipment artwork. See [Save formats, storage locations and editor recovery](docs/persistence.md).
 
@@ -38,7 +41,7 @@ Browser quick saves use local **IndexedDB**, not a server. Native quick saves us
 
 Click a living monster's **body or feet** once—no held attack key is needed. The player follows a collision-safe path, stops in melee range, faces the target, and repeatedly strikes. A gold ground ring marks the selection; the **upper-center target panel** shows its name, current/max HP, health bar, chase/attack status, and strike interval. It stays centered in the visible play area as the window or inventory changes.
 
-Default cadence is **one strike every 2.5 seconds**. Equipment changes attack speed (ASPD): `interval = 2.5 / (1 + sum(ASPD bonuses))`. The current catalog spans **2.0–2.78 seconds** per strike; the character panel displays the multiplier and interval. The short swing animation is separate from recovery, and every third consecutive strike still performs a stronger cleave. Repeated target clicks, switching targets, and changing equipment **do not reset the current cooldown**.
+Default cadence is **one strike every 2.5 seconds**. Equipment changes attack speed (ASPD): `interval = 2.5 / (1 + sum(ASPD bonuses))`. The unmodified catalog spans **2.0–2.78 seconds** per strike; rolled loot adds ASPD within the overall **0.5–2.0×** multiplier limit. The character panel displays the effective multiplier and interval. The short swing animation is separate from recovery, and every third consecutive strike still performs a stronger cleave. Repeated target clicks, switching targets, and changing equipment **do not reset the current cooldown**.
 
 Ground destinations are tile-based: clicking the **same destination tile again** preserves the active route and its waypoint progress, including the final approach. Clicking the **tile you currently occupy** as a new destination stops in place rather than pulling you back to its center. A genuinely different destination still replaces the route immediately.
 
@@ -46,11 +49,19 @@ A valid ground command (including a stop in the occupied tile), a dash, or a man
 
 ### Live equipment
 
-Each slot has three pieces with a distinct tint/silhouette and actual gameplay stats. Total armor reduces each incoming hit by `floor(armor × 0.65)`, with a minimum of one damage. Movement speed is `3.6 + sum(equipment speed bonuses)` tiles/second. Iron sallets/greaves each give −5% ASPD; cinder crowns and ranger leathers +5%; crimson mantles and fleetstriders +10%. The player starts with 120 vitality; kills grant embers and experience, and each 100 XP increases level and damage.
+Each slot has three pieces with a distinct tint/silhouette and actual gameplay stats. Total armor reduces each incoming hit by `floor(armor × 0.65)`, with a minimum of one damage. Movement speed is `3.6 + sum(equipment speed bonuses)` tiles/second. Iron sallets/greaves each give −5% ASPD; cinder crowns and ranger leathers +5%; crimson mantles and fleetstriders +10%. The player starts with 120 vitality; kills grant experience immediately and drop ember caches/gear on the ground. Each 100 XP increases level and damage.
+
+### Backpack and loot
+
+**B** opens a paused **24-cell backpack** with worn slots, item comparison and equip/unequip, reversible drop, confirmed salvage, sorting and **30-ember flask crafting**. You start with three worn Common items and three named spares, not every catalog piece. Shortcuts **1/2/3** only swap what you own. Full-bag swaps put the old piece into the incoming item's cell; failed pickups/unequips leave items intact.
+
+Each Hollow drops one piece of gear and **15 embers**, with a 25% flask chance. The Warden drops **two pieces (one guaranteed Relic)**, **45 embers** and a flask. Gear has Common / Tempered / Relic rarity with bounded armor, movement and ASPD bonuses; the comparison shows actual rolled stats. Click a marker to walk to it, or press **E** nearby. Pickups require range and clear geometry, never collect through walls, never auto-equip and **do not expire** with their corpse. Victory offers **COLLECT THE SPOILS** so the final drops stay accessible without increasing the clear time.
+
+All gear has stable ownership/IDs and persists with saves; reloading never rerolls rewards. Rarity does not change the artwork catalog or tint: edited frames apply to every owned instance of that base piece, never to its stats. See [Backpack, drop tables, economy and ownership](docs/loot.md).
 
 ### Animated player
 
-The player has **eight projected facing directions**, a **4-frame idle**, **8-frame walk**, and **6-frame attack**. Layers share a **96 × 96 logical cell** and fixed foot pivot; walking follows actual distance traveled, and attacks follow the existing swing/damage timeline—not the ASPD cooldown. Head/armor/boots retain all 27 live combinations, and the weapon moves behind or in front as the character turns. Pause/help freeze both the live sprite and paper doll.
+The player has **eight projected facing directions**, a **4-frame idle**, **8-frame walk**, and **6-frame attack**. Layers share a **96 × 96 logical cell** and fixed foot pivot; walking follows actual distance traveled, and attacks follow the existing swing/damage timeline—not the ASPD cooldown. Head/armor/boots support all 27 catalog combinations as pieces are acquired, and the weapon moves behind or in front as the character turns. Pause/help/backpack freeze both the live sprite and paper doll. Empty worn slots omit that equipment layer.
 
 Original starter sheets are generated once from bundled C++ code, uploaded with nearest filtering, and reused on restart. No PNG loading or web filesystem is needed. The previous procedural hero remains available if initialization fails or `ASHFALL_PLAYER_SPRITES=OFF` is selected. See [Player sprite format, timing, ownership, and fallback](docs/player-sprites.md) for the layout and verification details.
 
@@ -164,7 +175,7 @@ python3 tools/serve.py --directory build/web --port 8080
 
 Serve **all six files together** from `build/web`: `index.html`, `index.js`, `index.wasm`, `editor.html`, `editor.js`, and `editor.wasm`. The relative links between apps also work when hosted in a subdirectory. Do not open the HTML with `file://`. The included server binds to `0.0.0.0`, sends the correct WASM MIME type, and allows iframe previews and arbitrary preview hosts. Static hosting is sufficient; there is no backend. The browser needs WebGL and WebAssembly, not cross-origin isolation or SharedArrayBuffer.
 
-Release output is approximately **440 KiB for the game** and **520 KiB for the editor**, uncompressed (toolchain dependent). Each app starts with 32 MiB of WASM linear memory and allows growth; navigating between them unloads the other app. Threads, Asyncify, asset preloading, and Emscripten's filesystem are not used. Audio is intentionally not part of this MVP.
+Release output is approximately **493 KiB for the game** and **520 KiB for the editor**, uncompressed (toolchain dependent). Each app starts with 32 MiB of WASM linear memory and allows growth; navigating between them unloads the other app. Threads, Asyncify, asset preloading, and Emscripten's filesystem are not used. Audio is intentionally not part of this MVP.
 
 ### Existing/offline Raylib
 
@@ -201,7 +212,7 @@ Coverage includes both gradient API call shapes (without a graphics dependency),
 
 Character tests additionally verify projected facing/hysteresis, idle/walk/attack timing, distance-driven gait, pause/reset, every generated sheet cell and its padding/registration, all 27 equipment combinations, distinct directional bodies, and simulation equivalence with/without animation.
 
-Sprite editor tests additionally cover RGBA/hex handling and bounds, connected lines, stroke transactions, saved revisions, undo/redo branching, mirrored paint, bounded fill, transparency, rectangular transforms, the 64-entry history limit, PNG header/dimension preflight, and the procedural starter. `ASHFALL_BUILD_GAME=OFF` disables **both** graphics applications, keeping all five core suites free of Raylib. Project tests additionally cover all gear identities, raw/RLE round trips, full-frame registration, save points, frame switching and a malformed-file corpus. Persistence tests cover exact gameplay continuation, save/recovery codecs and malformed input, dirty/history semantics, autosave scheduling, bounded native reads and atomic file replacement.
+Sprite editor tests additionally cover RGBA/hex handling and bounds, connected lines, stroke transactions, saved revisions, undo/redo branching, mirrored paint, bounded fill, transparency, rectangular transforms, the 64-entry history limit, PNG header/dimension preflight, and the procedural starter. `ASHFALL_BUILD_GAME=OFF` disables **both** graphics applications, keeping all six core suites free of Raylib. Project tests additionally cover all gear identities, raw/RLE round trips, full-frame registration, save points, frame switching and a malformed-file corpus. Persistence tests cover exact gameplay continuation, save/recovery codecs and malformed input, dirty/history semantics, autosave scheduling, bounded native reads and atomic file replacement. The loot suite adds over 290,000 assertions for ownership, rarity bounds, capacity-neutral swaps, full-bag failures, pickup geometry, economy/cooldowns, v1 migration, hostile v2 records and mixed-transaction checkpoint replay.
 
 ### Real browser smoke tests (optional)
 
@@ -221,6 +232,7 @@ node tests/character_sprite_smoke.mjs
 node tests/sprite_editor_smoke.mjs
 node tests/equipment_art_smoke.mjs
 node tests/persistence_smoke.mjs
+node tests/loot_smoke.mjs
 ```
 
 This drives real mouse/keyboard inputs, checks gear/ASPD stats, blocked-tile picking, repeated mid-tile route replacement, same-destination/occupied-tile click spam without recentering or waypoint resets, body/feet target picking, a single-click chase and kill at the expected strike interval, live target HP, HUD click-through prevention, cancellation, dodging, pause, guide, restarting, death/removal cleanup, and target-panel layout after canvas resizing. Screenshots go into ignored `build/browser/`. `GAME_URL` overrides the game URL; `EDITOR_URL` overrides the editor URL. `PLAYWRIGHT_MODULE`, `CHROMIUM_EXECUTABLE`, and `CHROMIUM_ARGS` support an existing browser installation.
@@ -233,7 +245,9 @@ The equipment browser test verifies real frame painting/tinting, project/PNG exp
 
 The persistence browser test verifies actual IndexedDB run saves and whole-project recovery, file export/import, mid-stroke checkpoints, dirty/save-point invariants, corrupt/oversized inputs, delayed-I/O/Restart and late-recovery races, quota/retry, multi-tab writer ownership and denied storage.
 
-CI builds both native apps, compiles against actual Raylib 5.5/6.0 headers, runs all five core suites with/without sanitizers and all five browser suites, then rebuilds without diagnostics and runs `node tests/release_smoke.mjs` to verify production startup, PNG/project export, game save/load, editor draft recovery, artwork application and inter-app navigation. The `ashfall-web` artifact contains both complete apps.
+The loot browser test covers actual combat drops/pickups, paused backpack UI, owned-only shortcuts, item comparisons, empty gear layers, confirmed salvage, crafting, capacity/duplicates, sorting, exact v2 persistence, real-file v1 migration and post-victory loot. Synthetic capacity/victory fixtures use the normal portable file picker, not mutation hooks. CI also exercises inventory with sprites disabled.
+
+CI builds both native apps, compiles against actual Raylib 5.5/6.0 headers, runs all six core suites with/without sanitizers and all six browser suites, then rebuilds without diagnostics and runs `node tests/release_smoke.mjs` to verify production startup, PNG/project export, game save/load, owned inventory/victory pickups, editor draft recovery, artwork application and inter-app navigation. The `ashfall-web` artifact contains both complete apps.
 
 `ASHFALL_WEB_TEST_API` is **off by default**. It adds only a read-only state snapshot for tests; no teleport, invulnerability, damage, or other test-only mutation is exposed. Turn it off for a normal release. `make web` explicitly disables it, including after a diagnostic test build.
 
@@ -244,7 +258,9 @@ src/
   types.h                  Small graphics-independent vector, tile, color, bounds types
   grid.h / .cpp            2:1 projection, inverse picking, level, swept/substepped collision
   pathfinding.h / .cpp     Reusable eight-connected A* workspace + waypoint following
-  equipment.h / .cpp       Three slots × three pieces; armor/movement/ASPD/tint/silhouette
+  equipment.h / .cpp       Base catalog + owned instances/rarity rolls, optional worn slots and effective stats
+  loot.h / .cpp            Bounded backpack, atomic transfers, sorting and deterministic gear rolls
+  world_loot.cpp           Enemy tables, stable drop ownership, pickup routes, salvage/crafting
   player.h / .cpp          Navigation, ASPD/combo timers, dash, health, mitigation
   combat.h / .cpp          Enemy state + exact sector/AABB collision geometry
   world.h / .cpp           Target selection/chase/auto-combat, AI, damage/death, effects
@@ -258,7 +274,8 @@ src/
   snapshot_codec.h         Shared bounded little-endian/checksummed byte envelope
   snapshot_browser.h       Async/coalesced IndexedDB run/draft storage and editor writer lease
   local_store.*            Native bounded reads, data-directory policy and atomic file replacement
-  renderer.h / .cpp        World art, stable Y-sort, player sprite/fallback, HUD, paper doll, UI
+  renderer.h / .cpp        World/loot art, stable Y-sort, player sprite/fallback, HUD, paper doll, UI
+  inventory_ui.cpp         Responsive paused backpack, actual-stat comparison and owned-item controls
   raylib_compat.h          Compile-time drawing API compatibility (Raylib 5.5/6.0)
   main.cpp                 Raylib input, fixed-step driver, native/web lifecycle
   sprite_document.h / .cpp Graphics-independent RGBA document, tools, history, PNG preflight
@@ -270,11 +287,14 @@ tests/character_tests.cpp   Native animation/art/registration/equipment tests, n
 tests/sprite_tests.cpp      Native editor-document tests, no graphics dependency
 tests/equipment_art_tests.cpp Native equipment-project/codec/save-point tests, no graphics dependency
 tests/persistence_tests.cpp Native save/recovery/hostile-data/scheduling/storage tests
+tests/loot_tests.cpp        Native inventory/drop/economy/ownership/migration/stress tests
 tests/browser_smoke.mjs     Actual-browser game integration checks
 tests/character_sprite_smoke.mjs Player animation, observed GPU uploads and fallback checks
 tests/sprite_editor_smoke.mjs Actual-browser editor/PNG integration checks
 tests/equipment_art_smoke.mjs Equipment editing/projects/apply/persistence/GPU integration
 tests/persistence_smoke.mjs Actual-browser game saves, editor recovery, storage and race checks
+tests/loot_smoke.mjs        Actual-browser backpack/loot/rarity/migration/victory checks
+tests/fixtures/             Small genuine-v1 and synthetic-v2 portable run test inputs
 tests/release_smoke.mjs     Production exports/apply/save/load/recovery without diagnostics
 tests/png_helpers.mjs       Small PNG fixtures/reader used only by browser tests
 tools/serve.py             Preview-safe static server; optional --page editor.html
@@ -286,7 +306,7 @@ tools/serve.py             Preview-safe static server; optional --page editor.ht
 - `IsoProjection::worldToScreen` maps onto the untransformed 2:1 isometric plane:
   `screenX = originX + (x-y) × 32`, `screenY = originY + (x+y) × 16`.
 - Input first uses Raylib `GetScreenToWorld2D` to undo the camera, then the inverse projection. Tile selection uses **floor**, including negative coordinates.
-- Floor/light/telegraphs render first. Obstacles, portal, enemies, and the player share **one stable draw list sorted by projected foot Y**, rather than raw grid Y. Floating effects render afterwards.
+- Floor/light/telegraphs render first. Obstacles, portal, loot, enemies, and the player share **one stable draw list sorted by projected foot Y**, rather than raw grid Y. Floating effects render afterwards.
 - The player and paper doll share synchronized **Body → Boots → Armor → Head** sprite layers, with a rear/front weapon pass chosen by projected facing/swing. Fixed logical foot pivots preserve continuous position and foot-Y sorting; trimmed atlas cells only remove shared empty margins.
 
 ### Navigation, combat, and lifetime
@@ -302,7 +322,7 @@ tools/serve.py             Preview-safe static server; optional --page editor.ht
 
 ## Scope
 
-This is a deliberately small, complete single-arena MVP, not a content-heavy ARPG engine. Level layout and encounters are authored/procedural, loot is represented by immediate embers/XP, and customization cycles the built-in equipment catalog. Gameplay save/load and automatic editor recovery are implemented for the bundled sanctum/catalog. Audio, multiplayer, backpack/loot drops, extra levels/world editing, editable body/weapon layers, arbitrary timelines, onion skinning, full-atlas PNG authoring and additional hurt/death clips remain outside the current build.
+This is a deliberately small, complete single-arena MVP, not a content-heavy ARPG engine. Authored encounters now support a bounded backpack, owned equipment, Common/Tempered/Relic drops, ground ember/flask pickups, item comparison, salvage and flask crafting. Gameplay save/load (including v1 migration) and automatic editor recovery support the bundled sanctum/catalog. Audio, multiplayer, extra levels/world editing, editable body/weapon layers, arbitrary timelines, onion skinning, full-atlas PNG authoring and additional hurt/death clips remain for later feature PRs. Merchants, durability, quest items and weapon loot are not implied by this equipment-loot system.
 
 ## License
 

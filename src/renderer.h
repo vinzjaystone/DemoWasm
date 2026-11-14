@@ -9,14 +9,22 @@ namespace ashfall {
 
 struct ViewState {
     bool inventory = true;
+    bool backpack = false;
+    bool victoryAcknowledged = false;
+    std::uint32_t selectedItem = 4;
+    std::uint32_t confirmSalvage = 0;
     bool help = false;
     bool paused = false;
     bool showGrid = false;
     float zoom = 1.0f;
     std::string saveMessage;
+    bool modal(const World& world) const {
+        return help || paused || !world.player.alive() || (world.cleared() && !victoryAcknowledged);
+    }
 };
 enum class UiAction {
-    None, ToggleInventory, ToggleHelp, TogglePause, Restart, Fullscreen,
+    None, ToggleInventory, ToggleBackpack, ToggleHelp, TogglePause, Restart, Fullscreen,
+    EquipItem, DropItem, SalvageItem, SortItems, CraftFlask, Pickup, ContinueLooting,
     CycleHead, CycleArmor, CycleBoots, Heal, Attack, Dash, ZoomIn, ZoomOut, ResetZoom, ImportArt, RestoreArt, SaveRun, LoadRun, ExportRun, ImportRun
 };
 struct Layout {
@@ -25,7 +33,10 @@ struct Layout {
     Rectangle targetHud{};
     Rectangle sidebar{};
     Rectangle footer{};
-    Rectangle inventoryButton{};
+    Rectangle inventoryButton{}, backpackButton{}, pickupButton{};
+    Rectangle bagPanel{},bagDetails{},bagClose{},bagEquip{},bagDrop{},bagSalvage{},bagSort{},bagCraft{};
+    std::array<Rectangle,Backpack::Capacity> bagCells{};
+    std::array<Rectangle,3> bagWorn{};
     Rectangle helpButton{};
     Rectangle pauseButton{};
     Rectangle fullscreenButton{};
@@ -57,6 +68,8 @@ public:
     bool sceneContains(Vector2 mouse, const World& world, const ViewState& view) const;
     // Front-most living sprite under the cursor (body or feet), never an entity pointer.
     std::uint32_t pickEnemy(Vector2 point, const World& world) const;
+    std::uint32_t pickLoot(Vector2 point,const World& world) const;
+    std::uint32_t pickInventory(Vector2 point,const World& world,const ViewState& view) const;
     Vec2 screenToWorld(Vector2 point) const;
     Vector2 worldToScreen(Vec2 point) const;
     const Layout& layout() const { return layout_; }
@@ -66,7 +79,7 @@ public:
 private:
     struct DrawItem {
         float depth = 0;
-        int kind = 0; // 0 obstacle, 1 portal, 2 enemy, 3 player
+        int kind = 0; // 0 obstacle, 1 portal, 2 enemy, 3 player, 4 loot
         std::size_t index = 0;
         TileCoord tile;
     };
@@ -82,6 +95,8 @@ private:
     void drawFloor(const World& world, const ViewState& view);
     void drawObstacle(const World& world, TileCoord tile);
     void drawPortal(const World& world);
+    void drawLoot(const GroundLoot& loot,bool selected) const;
+    void drawBackpack(const World& world,const ViewState& view) const;
     void drawHero(Vector2 feet, const Player& player, float scale, bool preview = false) const;
     void drawEnemy(const Enemy& enemy, bool selected, bool hovered) const;
     void drawSector(Vec2 center, Vec2 direction, float radius, float halfArc, Color fill, Color edge, float lift = 0) const;

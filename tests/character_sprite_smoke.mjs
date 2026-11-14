@@ -133,7 +133,7 @@ try {
   // Shared registration under both live and paper-doll equipment changes.
   for (const [key, field] of [['Digit1','head'], ['Digit2','body'], ['Digit3','boots']]) {
     const variants = new Set([(await state())[field]]);
-    for (let i = 0; i < 3; ++i) {
+    for (let i = 0; i < 2; ++i) {
       const before = await state();
       await page.keyboard.press(key);
       const changed = await until(s => s[field] !== before[field], `${field} layer change`);
@@ -141,11 +141,11 @@ try {
       assert.equal(changed.x, 8.5); assert.equal(changed.y, 12.5);
       assert.equal(changed.spriteClip, 'idle');
     }
-    assert.equal(variants.size, 3);
+    assert.equal(variants.size, 2, 'shortcuts rotate only the two starter pieces owned for this slot');
   }
   assert.deepEqual(await uploads(), gpu, 'gear cycles use resident sheets');
   await page.screenshot({ path: `${artifacts}/${expected ? 'character-sprites' : 'character-fallback'}.png` });
-  console.log('[PASS] All head/armor/boots variants remain live; no sprite reallocation');
+  console.log('[PASS] Owned head/armor/boots swaps remain live; no sprite reallocation');
 
   await restart();
   await clickWorld(8.5, 10.5); // Clear corridor: no monster interception.

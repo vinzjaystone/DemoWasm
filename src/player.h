@@ -1,6 +1,6 @@
 #pragma once
 
-#include "equipment.h"
+#include "loot.h"
 #include "pathfinding.h"
 #include <cstdint>
 
@@ -34,6 +34,7 @@ public:
     Vec2 knockback{};
     Navigation navigation;
     Equipment equipment;
+    Backpack backpack=Backpack::starter();
     Attack attack;
     int health = MaxHealth;
     int potions = 3;

@@ -21,9 +21,9 @@
     .track { width: 160px; height: 2px; background: #2d3535; margin-top: 24px; overflow: hidden; }
     .spark { width: 40%; height: 100%; background: #d3ab68; animation: kindle 1.4s ease-in-out infinite; }
     @keyframes kindle { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
-    #sprite-editor-link { position: absolute; z-index: 2; top: 27px; left: 600px; padding: 8px 12px; border: 1px solid #2d3535; color: #d3ab68; background: #121719; font: 10px/1 ui-monospace, monospace; letter-spacing: .08em; text-decoration: none; }
+    #sprite-editor-link { position: absolute; z-index: 2; top: 27px; left: 705px; padding: 8px 12px; border: 1px solid #2d3535; color: #d3ab68; background: #121719; font: 10px/1 ui-monospace, monospace; letter-spacing: .08em; text-decoration: none; }
     #sprite-editor-link:hover, #sprite-editor-link:focus-visible { border-color: #d3ab68; background: #192122; outline: none; }
-    @media (max-width: 1100px) { #sprite-editor-link { left: auto; right: 76px; } }
+    @media (max-width: 1100px) { #sprite-editor-link { left: auto; top: auto; bottom: 10px; right: 10px; } }
     @media (max-width: 759px) { #sprite-editor-link { top: auto; bottom: 10px; right: 10px; font-size: 9px; padding: 6px 8px; } }
     noscript { position: fixed; top: 25%; width: 100%; text-align: center; color: #dee0d0; font-family: sans-serif; }
   </style>
@@ -33,7 +33,7 @@
     <a id="sprite-editor-link" href="editor.html" aria-label="Open the Sprite Workshop editor">SPRITE EDITOR ↗</a>
     <input id="run-file" type="file" accept=".ashrun" aria-label="Import a saved game run">
     <input id="equipment-file" type="file" accept=".ashgear" aria-label="Import equipment artwork project">
-    <canvas id="canvas" tabindex="0" aria-label="Ashfall game. Left click ground to move or a monster to chase and auto-attack, right click or Space to attack, Shift to dodge, Q to heal, H for field guide, U to import equipment artwork, K to save your run, L to load the saved run." oncontextmenu="event.preventDefault()"></canvas>
+    <canvas id="canvas" tabindex="0" aria-label="Ashfall game. Left click ground to move or a monster to chase and auto-attack, right click or Space to attack, Shift to dodge, Q to heal, E to collect nearby loot, B for the backpack and item comparisons, 1 2 3 to swap owned equipment, H for field guide, U to import equipment artwork, K to save your run, L to load the saved run." oncontextmenu="event.preventDefault()"></canvas>
     <div id="loading" role="status" aria-live="polite">
       <div class="mark" aria-hidden="true">♢</div>
       <h1>ASHFALL</h1>

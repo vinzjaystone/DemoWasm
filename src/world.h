@@ -52,7 +52,21 @@ public:
     bool attackAt(Vec2 target);
     bool dashTo(Vec2 target);
     bool heal();
-    void cycleEquipment(EquipmentSlot slot);
+    void cycleEquipment(EquipmentSlot slot); // Owned spares only; never creates a catalog item.
+    bool equipItem(std::uint32_t id);
+    bool unequipItem(EquipmentSlot slot);
+    bool dropItem(std::uint32_t id);
+    bool salvageItem(std::uint32_t id);
+    bool craftFlask();
+    const GearItem* ownedItem(std::uint32_t id) const;
+    bool wornItem(std::uint32_t id) const;
+    const GroundLoot* findLoot(std::uint32_t id) const;
+    const GroundLoot* nearbyLoot() const;
+    bool canReachLoot(const GroundLoot& loot) const;
+    bool selectLoot(std::uint32_t id);
+    bool pickupLoot(std::uint32_t id);
+    int pickupNearby();
+    std::uint32_t selectedLootId() const { return selectedLootId_; }
     void notify(std::string text, float duration = 2.0f);
     void spawnEnemy(EnemySpawn spawn);
     int livingEnemies() const;
@@ -61,6 +75,7 @@ public:
     Grid grid;
     Player player;
     std::vector<Enemy> enemies;
+    std::vector<GroundLoot> groundLoot;
     std::vector<Particle> particles;
     std::vector<DamageNumber> damageNumbers;
     ClickMarker click;
@@ -78,6 +93,13 @@ public:
 private:
     friend struct save::RunCodec;
     Pathfinder pathfinder_;
+    std::uint32_t nextLootId_=7;
+    std::uint32_t lootRng_=InitialLootSeed;
+    std::uint32_t selectedLootId_=0;
+    void clearLootTarget();
+    void updateLootTarget();
+    void dropEnemyLoot(const Enemy& enemy);
+    void placeLoot(GroundLoot loot,Vec2 origin);
     std::uint32_t selectedEnemyId_ = 0; // IDs survive vector erasure/reallocation; never store a target pointer.
     TargetAction targetAction_ = TargetAction::None;
     float targetRepath_ = 0;

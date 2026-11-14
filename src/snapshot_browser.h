@@ -6,7 +6,7 @@
 #include <emscripten/emscripten.h>
 EM_JS(void,installSnapshotBridge,(int editor),{
     const isEditor=!!editor, key=isEditor?'editor':'run', maximum=isEditor?52428928:131072;
-    let epoch=0, writes=Promise.resolve(), pending=null, draining=false, hasLock=false, acquiring=false;
+    let epoch=0, writes=Promise.resolve(), pending=null, draining=false, hasLock=false, acquiring=false, reading=false;
     function database() {
         return new Promise(function(resolve,reject) {
             let abandoned=false;
@@ -39,7 +39,7 @@ EM_JS(void,installSnapshotBridge,(int editor),{
         HEAPU8.set(bytes,pointer); Module._ashfall_snapshot_receive(bytes.length);
     }
     async function read() {
-        const operation=++epoch;
+        const operation=++epoch; reading=true;
         // A quick Load after Save must observe that completed write, not the
         // previous record. Failed writes don't poison future operations.
         try {
@@ -47,6 +47,7 @@ EM_JS(void,installSnapshotBridge,(int editor),{
             const bytes=await storage('readonly');
             if(bytes===undefined) status(operation,0);else send(bytes,operation);
         } catch(error) { status(operation,-1); }
+        finally { if(operation===epoch) reading=false; }
     }
     function load() {
         if(!isEditor || !navigator.locks || hasLock) { read(); return; }
@@ -63,7 +64,7 @@ EM_JS(void,installSnapshotBridge,(int editor),{
         }).catch(function(){acquiring=false;status(operation,-1);});
     }
     function write(bytes) {
-        const operation=++epoch;
+        const operation=++epoch; reading=false;
         if(isEditor && navigator.locks && !hasLock) {status(operation,-4);return;}
         // Keep at most one active write and one latest pending snapshot. A
         // slow/quota-limited database must not accumulate whole-project copies.
@@ -87,14 +88,20 @@ EM_JS(void,installSnapshotBridge,(int editor),{
     }
     async function importFile(file) {
         if(!file) return;
-        const operation=++epoch;
+        const operation=++epoch; reading=true;
         try {
             if(!file.size || file.size>maximum) { status(operation,-3); return; }
             send(new Uint8Array(await file.arrayBuffer()),operation);
         } catch(error) { status(operation,-1); }
-        finally { Module.canvas.focus({preventScroll:true}); }
+        finally { if(operation===epoch) reading=false; Module.canvas.focus({preventScroll:true}); }
     }
-    Module.snapshotStore={load:load,write:write,clear:function(){write(null);},cancel:function(){++epoch;},
+    Module.snapshotStore={load:load,write:write,clear:function(){write(null);},cancel:function(){++epoch;reading=false;},
+        cancelRead:function(){
+            // Inventory edits cancel older reads/imports, NOT an unrelated
+            // explicit Save's completion. Keep honest write acknowledgements.
+            if(!reading) return false;
+            ++epoch; reading=false; return true;
+        },
         leave:function(){
             const navigate=function(){Module.allowEditorExit=true;window.location.href='index.html';};
             writes.then(navigate,navigate); // Explicit Back waits; browser/tab shutdown is best effort.

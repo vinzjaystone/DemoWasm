@@ -20,14 +20,23 @@ for (const page of [game, editor]) {
 }
 await context.addInitScript(() => {
   window.__snapshotOpenDelay = 0; window.__failSnapshotWrites = false; window.__snapshotPuts = 0;
+  window.__holdSnapshotOpens = false; window.__heldSnapshotOpens = [];
+  window.__releaseSnapshotOpens = function () {
+    window.__holdSnapshotOpens = false;
+    for (const finish of window.__heldSnapshotOpens.splice(0)) finish();
+  };
   const open = IDBFactory.prototype.open;
   IDBFactory.prototype.open = function (name, ...args) {
     const request = open.call(this, name, ...args), delay = window.__snapshotOpenDelay;
-    if (name !== 'ashfall-saves' || !delay) return request;
+    if (name !== 'ashfall-saves' || (!delay && !window.__holdSnapshotOpens)) return request;
     return new Proxy(request, {
       get(target, key) { const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value; },
       set(target, key, value) {
-        if (key === 'onsuccess') return Reflect.set(target, key, event => setTimeout(() => value(event), delay), target);
+        if (key === 'onsuccess') return Reflect.set(target, key, event => {
+          const finish = () => value(event);
+          if (window.__holdSnapshotOpens) window.__heldSnapshotOpens.push(finish);
+          else setTimeout(finish, delay);
+        }, target);
         return Reflect.set(target, key, value, target);
       },
     });
@@ -257,15 +266,20 @@ try {
   // Hold the first write open, queue more snapshots, then explicitly export.
   // Only the active snapshot + latest clear may reach storage; older queued
   // strokes must not reappear after a save or accumulate whole-project copies.
-  const puts = await editor.evaluate(() => { window.__snapshotOpenDelay = 5000; return window.__snapshotPuts; });
+  // Use an explicit I/O latch, not a five-second assumption about software-GPU
+  // frame speed: the first job must remain active until every later edit and
+  // the export/clear have actually been submitted.
+  const puts = await editor.evaluate(() => { window.__holdSnapshotOpens = true; return window.__snapshotPuts; });
   for (let x = 21; x <= 23; ++x) {
     const attempt = (await editorState()).autosaveSerial;
     await paint([x, 7]);
     await editorUntil(s => s.autosaveSerial > attempt && s.autosaveStatus === 3 && !s.autosavePending, 'queued checkpoint during slow storage');
+    if (x === 21) await editor.waitForFunction(() => window.__heldSnapshotOpens.length === 1);
   }
   const finalDownload = editor.waitForEvent('download'); await editor.keyboard.press('Control+s'); await finalDownload;
   await editorUntil(s => !s.dirty, 'export during pending writes');
-  await editor.evaluate(() => { window.__snapshotOpenDelay = 0; });
+  assert.equal(await editor.evaluate(() => window.__heldSnapshotOpens.length), 1, 'only one active storage operation while edits coalesce');
+  await editor.evaluate(() => window.__releaseSnapshotOpens());
   await editorUntil(s => s.autosaveStatus === 2 && !s.autosavePending, 'last queued clear commits');
   assert.equal(await stored(editor, 'editor'), null);
   assert.equal(await editor.evaluate(() => window.__snapshotPuts), puts + 1, 'superseded snapshots are coalesced, not written after the export');
