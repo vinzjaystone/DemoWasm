@@ -165,8 +165,12 @@ try {
   assert.equal(latest.moving, false, 'route completes within the deadline');
   assert.ok(walkFrames.size >= 3, 'walk frames advance with continuous displacement');
   assert.ok(Math.hypot(latest.x - 8.5, latest.y - 10.5) < 0.01);
-  assert.equal(latest.spriteClip, 'idle');
-  assert.ok(latest.spriteWalkDistance > 1.8);
+  // Completing the route can still move the player on that final fixed tick.
+  // The distance-driven sprite correctly stays walking until a stationary tick;
+  // a RAF with only one simulation step exposes this boundary more often.
+  const stopped = await until(s => !s.moving && !s.walking, 'stationary tick after arrival');
+  assert.equal(stopped.spriteClip, 'idle');
+  assert.ok(stopped.spriteWalkDistance > 1.8);
   console.log('[PASS] Continuous navigation, distance-driven walk cadence, return to idle');
 
   await restart();

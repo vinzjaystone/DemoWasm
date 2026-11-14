@@ -124,6 +124,33 @@ void distanceAndPause() {
     CHECK(a.idleSeconds()==0 && a.walkDistance()==0 && a.pose().frame==0);
     CHECK(a.pose().direction==quantizeDirection(slow.facing));
 }
+void navigationArrivalTransition() {
+    World world;
+    world.movePlayerTo({8.5f,10.5f});
+    Animator animation; animation.reset(world.player);
+    constexpr float step=1.0f/120;
+    bool arrived=false;
+    for (int tick=0;tick<240 && !arrived;++tick) {
+        const bool wasMoving=world.player.navigation.moving();
+        const Vec2 previous=world.player.position;
+        world.update(step); animation.update(world.player,step,true);
+        if (wasMoving && !world.player.navigation.moving()) {
+            // A completed route is not yet a stationary simulation sample:
+            // this tick still displaced the player to the final waypoint.
+            CHECK(distance(previous,world.player.position)>0.001f);
+            CHECK(world.player.walking && animation.pose().clip==Clip::Walk);
+            CHECK(near(world.player.position.x,8.5) && near(world.player.position.y,10.5));
+            animation.update(world.player,0,true); // Input-only RAF synchronization.
+            CHECK(animation.pose().clip==Clip::Walk);
+            world.update(step); animation.update(world.player,step,true);
+            CHECK(!world.player.navigation.moving() && !world.player.walking);
+            CHECK(animation.pose().clip==Clip::Idle);
+            CHECK(animation.walkDistance()>1.8);
+            arrived=true;
+        }
+    }
+    CHECK(arrived);
+}
 void transitionsAndAttackLock() {
     Player player; Animator animation;
     animation.reset(player);
@@ -280,6 +307,7 @@ int main() {
         {"projected directions, hysteresis, weapon ordering",directions},
         {"clip loops and attack damage-window markers",clipsAndAttackTiming},
         {"distance-driven walk, idle clock, pause, teleport, reset",distanceAndPause},
+        {"route completion, final displacement, stationary idle transition",navigationArrivalTransition},
         {"transitions, locked attack facing, independent recovery",transitionsAndAttackLock},
         {"all sheets, alpha, packing, bounds and foot registration",packingTransparencyAndRegistration},
         {"eight silhouettes and all 27 equipment combinations",silhouettesAndEquipment},
